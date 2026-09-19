@@ -1,0 +1,10 @@
+# Local customizations. The upstream installer never touches this file;
+# n8nctl.sh passes it to every compose call and includes it in backups.
+#
+# Bind n8n to the loopback interface only, so other machines on the network
+# cannot reach it. Remove the 127.0.0.1 prefix (or front it with a TLS reverse
+# proxy) if you deliberately want LAN access.
+services:
+  n8n:
+    ports: !override
+      - '127.0.0.1:5678:5678'

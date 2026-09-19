@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# stub docker for n8nctl smoke tests
+S="$STUB_ROOT"; V="$STUB_STATE/volumes"
+echo "docker $*" >> "$STUB_STATE/docker.calls"
+case "$1" in
+  --version) echo "Docker version 27.1.0, build abc"; exit 0 ;;
+  info) exit 0 ;;
+  volume)
+    case "$2" in
+      ls) ls -1 "$V" 2>/dev/null; exit 0 ;;
+      rm) rm -rf "$V/$3"; exit 0 ;;
+    esac ;;
+  run)
+    # parse -v src:dst[:ro] mounts, then run the trailing command with paths mapped
+    shift; declare -a mounts=(); cmd=()
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --rm) ;;
+        -v) mounts+=("$2"); shift ;;
+        alpine:3) shift; cmd=("$@"); break ;;
+      esac; shift
+    done
+    data=""; backup=""
+    for m in "${mounts[@]}"; do
+      src="${m%%:*}"; rest="${m#*:}"; dst="${rest%%:*}"
+      case "$dst" in /data) data="$V/$src"; mkdir -p "$data" ;; /backup) backup="$src" ;; esac
+    done
+    if [[ "${cmd[0]}" == "sh" ]]; then script="${cmd[2]}"; else script="${cmd[*]}"; fi
+    script="${script//\/data/$data}"; script="${script//\/backup/$backup}"
+    bash -c "$script"; exit $? ;;
+  compose)
+    shift
+    while [[ "$1" == "-f" ]]; do shift 2; done
+    case "$1" in
+      version) echo "2.29.7"; exit 0 ;;
+      pull) exit 0 ;;
+      up) mkdir -p "$V/n8n_n8n-data"; [[ ! -f "$V/n8n_n8n-data/database.sqlite" ]] && echo "v1" > "$V/n8n_n8n-data/database.sqlite"
+          for a in "$@"; do [[ "$a" == "--no-start" ]] && exit 0; done
+          touch "$STUB_STATE/running"; exit 0 ;;
+      down) rm -f "$STUB_STATE/running"; for a in "$@"; do [[ "$a" == "-v" ]] && rm -rf "$V/n8n_n8n-data"; done; exit 0 ;;
+      stop) rm -f "$STUB_STATE/running"; exit 0 ;;
+      start) touch "$STUB_STATE/running"; exit 0 ;;
+      ps) if [[ -f "$STUB_STATE/running" ]]; then
+            for a in "$@"; do [[ "$a" == "-q" ]] && { echo "abc123"; exit 0; }; done
+            echo "NAME        STATUS"; echo "n8n-n8n-1   running"
+          fi; exit 0 ;;
+      logs) echo "[stub] logs $*"; exit 0 ;;
+    esac ;;
+esac
+echo "stub docker: unhandled: $*" >&2; exit 1

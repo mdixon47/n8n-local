@@ -1,0 +1,21 @@
+name: ci
+on:
+  push:
+  pull_request:
+jobs:
+  lint-and-test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck (macOS)
+        if: runner.os == 'macOS'
+        run: brew install shellcheck
+      - name: Syntax
+        run: bash -n n8nctl.sh
+      - name: ShellCheck
+        run: shellcheck n8nctl.sh
+      - name: Smoke test (stubbed docker and curl)
+        run: test/smoke.sh

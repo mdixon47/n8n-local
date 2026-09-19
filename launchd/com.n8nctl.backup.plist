@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.n8nctl.backup</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-c</string>
+    <string>cd "/Volumes/Seagate HDD Media/projects/n8n-local" &amp;&amp; ./n8nctl.sh -y backup &amp;&amp; ./n8nctl.sh -y backups --prune 14</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>3</integer>
+    <key>Minute</key>
+    <integer>30</integer>
+  </dict>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>NO_COLOR</key>
+    <string>1</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>/Volumes/Seagate HDD Media/projects/n8n-local/n8n-backups/launchd.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Volumes/Seagate HDD Media/projects/n8n-local/n8n-backups/launchd.log</string>
+</dict>
+</plist>

@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# stub curl for n8nctl smoke tests
+S="$STUB_ROOT"
+out=""; url=""
+args=("$@")
+for ((i=0;i<${#args[@]};i++)); do
+  case "${args[i]}" in
+    -o) out="${args[i+1]}"; ((i++)) ;;
+    http*|https*) url="${args[i]}" ;;
+  esac
+done
+case "$url" in
+  https://get.n8n.io) cp "$S/fixtures/get-n8n.sh" "$out"; exit 0 ;;
+  *get-n8n-compose.yml*) cat "$S/fixtures/get-n8n-compose.yml"; exit 0 ;;
+  *api.github.com*) echo '{"tag_name": "n8n@2.35.3"}'; exit 0 ;;
+  *127.0.0.1:5678*) [[ -f "$STUB_STATE/running" ]] && exit 0 || exit 7 ;;
+  *) echo "stub curl: unhandled $url" >&2; exit 22 ;;
+esac
