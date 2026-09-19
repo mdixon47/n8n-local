@@ -1,42 +1,150 @@
 # n8n-local
 
 Self-hosted [n8n](https://n8n.io) (Community edition) on Docker, installed with
-n8n's official one-line installer and driven by `n8nctl.sh`, a small bash
+n8n's official one-line installer and driven by `n8nctl.sh`, a single-file bash
 wrapper that adds the safety rails the raw `curl | sh` flow lacks:
 
 - the installer is downloaded to a file, hashed, compared with the last hash in
   `n8nctl.log`, and offered for review before it runs. It is never piped into a shell
-- every install and upgrade is pinned to an explicit n8n version
-- the AI Assistant model key is entered on a hidden prompt (or piped on stdin)
-  and written straight to `n8n/.env`, never to a command line or the log
+- every install and upgrade is pinned to an explicit n8n version; downgrades are refused
+- Assistant model keys are entered on a hidden prompt (or piped on stdin) and
+  written straight to `n8n/.env`, never to a command line or the log
 - backups pause n8n for a consistent SQLite snapshot and keep `.env` (which
   holds the encryption key) together with the data tarball
-- restore, upgrade and uninstall all take a snapshot first, and downgrades are refused
+- restore, upgrade and uninstall all take a snapshot first
+- every state change is appended to `n8nctl.log`
 
 The n8n Assistant is a bring-your-own-key feature: Anthropic, OpenAI, or
 OpenRouter. n8n itself is free; the model provider is the only cost.
 
+## Contents
+
+- [Requirements](#requirements)
+- [Quick start](#quick-start)
+- [Getting a model key](#getting-a-model-key)
+- [Keys and models](#keys-and-models)
+- [Two providers: a partner key and a fallback](#two-providers-a-partner-key-and-a-fallback)
+- [Everyday commands](#everyday-commands)
+- [Running day to day](#running-day-to-day)
+- [Backups, verify, restore](#backups-verify-restore)
+- [Upgrading](#upgrading)
+- [Local-only binding and other customizations](#local-only-binding-and-other-customizations)
+- [Nightly backups (macOS launchd)](#nightly-backups-macos-launchd)
+- [Troubleshooting](#troubleshooting)
+- [Layout](#layout)
+- [Environment overrides](#environment-overrides)
+- [Security notes](#security-notes)
+- [Developing the wrapper](#developing-the-wrapper)
+
 ## Requirements
 
-Docker with the `docker compose` v2 plugin, `curl`, and bash 3.2+ (Linux or macOS).
-On Windows use WSL with Docker Desktop's WSL2 integration.
+- Docker with the `docker compose` v2 plugin. The legacy `docker-compose`
+  binary does not work. On macOS that means Docker Desktop, started and idle.
+- `curl`, `bash` 3.2 or newer, and coreutils. Linux and macOS are supported.
+  On Windows use WSL with Docker Desktop's WSL2 integration.
+- Port 5678 free.
+
+`./n8nctl.sh preflight` checks all of this and reports what is missing.
 
 ## Quick start
 
 ```bash
-./n8nctl.sh preflight                     # check Docker, compose v2, port 5678
+open -a Docker                            # macOS: start Docker Desktop first
+./n8nctl.sh preflight                     # Docker, compose v2, curl, port 5678, .gitignore
 ./n8nctl.sh install --version 2.35.3      # pinned install; review the installer when asked
-./n8nctl.sh set-key                       # hidden prompt for the Assistant model key
-./n8nctl.sh status                        # health, versions, key present?
+./n8nctl.sh set-key --provider anthropic  # hidden prompt for the Assistant model key
+./n8nctl.sh status                        # health, versions, keys on file, active model
 ```
 
-Then open <http://localhost:5678>, create the owner account, and pick the
-provider and model under the instance AI settings in the UI.
+Then open <http://localhost:5678>, create the owner account, and confirm the
+Assistant sidebar responds. The first install pulls five images and takes a
+few minutes.
+
+The first run of `install` shows the installer's size, version and sha256 and
+offers to open it in a pager. Answer yes to run it. Later runs only prompt
+again if the upstream script has changed. `-y` skips every prompt, which is
+meant for scripts, not for the first install.
+
+## Getting a model key
+
+The key is not created by n8n. It comes from the model provider's own
+dashboard; n8n only stores it and sends requests with it. Pick one:
+
+| Provider | Where to create it | Key prefix |
+| --- | --- | --- |
+| Anthropic | <https://console.anthropic.com> → API Keys → Create Key | `sk-ant-` |
+| OpenAI | <https://platform.openai.com/api-keys> → Create new secret key | `sk-` |
+| OpenRouter | <https://openrouter.ai/keys> → Create Key | `sk-or-` |
+
+Each provider needs a payment method or prepaid credit before the key works.
+The key is shown once at creation, so copy it right then. OpenRouter is one
+key for many models, including Anthropic and OpenAI ones, and it routes each
+model across several upstream providers.
+
+Handling rules:
+
+- paste the key only at the wrapper's hidden prompt, never as a command
+  argument, never into a chat, never into a commit
+- the wrapper writes it to `n8n/.env` (mode 600) and logs only the variable name
+- every other secret in `n8n/.env` (runner tokens, sandbox keys, the SearXNG
+  secret) was generated by the installer and needs no action
+
+## Keys and models
+
+How n8n picks the key (from its source, `instance-ai-settings.service.ts`):
+
+1. `N8N_INSTANCE_AI_MODEL` selects the model in `provider/model` form.
+   Default: `anthropic/claude-opus-4-8`. Providers: `anthropic`, `openai`,
+   `openrouter`.
+2. If the generic `N8N_INSTANCE_AI_MODEL_API_KEY` is set, it is used for
+   whatever provider is active.
+3. Otherwise n8n falls back to the provider's own variable:
+   `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or `OPENROUTER_API_KEY`.
+
+The wrapper maps onto that directly:
+
+| Task | Command |
+| --- | --- |
+| Store a provider's key | `./n8nctl.sh set-key --provider anthropic` (or `openai`, `openrouter`) |
+| Store the generic key | `./n8nctl.sh set-key` (overrides every provider key) |
+| Pipe a key instead of typing | `printf '%s\n' "$KEY" \| ./n8nctl.sh set-key --provider openai` |
+| Remove a key | `./n8nctl.sh set-key --remove` or `set-key --provider X --remove` |
+| Switch the active model | `./n8nctl.sh set-model openai/gpt-5.5` |
+| See what is on file | `./n8nctl.sh status` → `Model:` and `Assistant: keys on file:` |
+
+`set-key` and `set-model` restart the stack when it is running so the change
+applies immediately. `set-model` warns if no key exists for that provider.
+Provider and model can also be set in the n8n UI under the instance AI
+settings; keys stored there are encrypted in the database and take priority
+over `.env`.
+
+## Two providers: a partner key and a fallback
+
+The Assistant uses one model at a time and n8n has no automatic failover.
+Redundancy means keeping a key on file for each provider and switching in one
+command when the primary is down:
+
+```bash
+./n8nctl.sh set-key --provider anthropic     # primary
+./n8nctl.sh set-key --provider openrouter    # partner / fallback
+./n8nctl.sh set-key --remove                 # clear the generic key so per-provider keys apply
+./n8nctl.sh status                           # "keys on file: anthropic openrouter"
+
+./n8nctl.sh set-model openrouter/anthropic/claude-opus-4-8   # switch when the primary is down
+./n8nctl.sh set-model anthropic/claude-opus-4-8              # and back
+```
+
+If the generic key is still set, `set-key --provider` warns you: the generic
+key wins for every provider, so a model switch would send the wrong key.
+The model name must be one the provider offers; check its model list.
 
 ## Everyday commands
 
 | Task | Command |
 | --- | --- |
+| Check prerequisites | `./n8nctl.sh preflight` |
+| Fresh install (pinned) | `./n8nctl.sh install --version X.Y.Z` |
+| Health and config | `./n8nctl.sh status` |
 | Start / stop / follow logs | `./n8nctl.sh start` · `stop` · `logs [service]` |
 | Snapshot | `./n8nctl.sh backup` |
 | List snapshots | `./n8nctl.sh backups` |
@@ -46,31 +154,62 @@ provider and model under the instance AI settings in the UI.
 | Upgrade (backs up first) | `./n8nctl.sh upgrade --version X.Y.Z` |
 | Remove everything | `./n8nctl.sh uninstall` |
 | Skip prompts | add `-y` / `--yes` |
+| Help | `./n8nctl.sh help` |
 
 `upgrade` and `uninstall` accept `--skip-backup`; `restore` accepts
-`--no-safety-backup`. `install` and `upgrade` accept `--no-start`.
+`--no-safety-backup`; `install` and `upgrade` accept `--no-start`.
+Anything destructive (`restore`, `uninstall`, `backups --prune`) asks first
+and refuses to run without a terminal unless `-y` is given.
 
-## Two providers: a partner key and a fallback
+## Running day to day
 
-The Assistant uses one model at a time, but you can keep a key on file for
-each provider and switch between them in one command. n8n reads the generic
-`N8N_INSTANCE_AI_MODEL_API_KEY` if set, otherwise the active provider's own
-variable (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`). n8n has
-no automatic failover, so the fallback is a manual switch:
+- The stack keeps running in the background until `./n8nctl.sh stop`. Docker
+  Desktop brings it back after a reboot if its "start on login" setting is on;
+  otherwise run `./n8nctl.sh start`, which waits for the health endpoint.
+- `./n8nctl.sh logs n8n` follows the main service. Other service names are
+  `runners`, `sandbox-api`, `sandbox-runner-1`, and `searxng`.
+- Workflows, credentials and executions live in the Docker volume
+  `n8n_n8n-data`, not in the project folder, so `stop` never loses data.
+- With the override from the next sections in place, n8n is reachable only
+  from this machine at <http://localhost:5678>. Reaching it from other
+  devices needs the LAN binding and, for anything public, a reverse proxy with
+  TLS. Public webhooks additionally need a tunnel or a public hostname.
+- The health endpoint is `http://localhost:5678/healthz`.
+
+## Backups, verify, restore
+
+`backup` stops only the `n8n` service, archives the data volume through a
+helper container, restarts n8n and waits for it to be healthy, then copies
+`.env`, `compose.yml`, `compose.override.yml` (if present) and
+`searxng-settings.yml` next to the tarball with a `manifest` holding the
+version, volume name, reason and the tarball's sha256. Expect a few seconds
+of downtime. Two snapshots in the same second get a `_2` suffix.
+
+`verify <dir>` checks that all files are present, `.env` is mode 600, the
+tarball hash matches the manifest, the n8n version agrees between manifest and
+`.env`, and `database.sqlite` is inside the archive.
+
+`restore <dir>` first snapshots the current state (skip with
+`--no-safety-backup`), stops the stack, puts the config files back, lets
+compose recreate the volume, wipes and extracts the data, then starts and
+waits for health. Everything created after the snapshot is lost. The
+encryption key travels in `.env`, which is why config and data are always
+restored together.
+
+`backups --prune N` deletes all but the newest N snapshots after confirmation.
+
+## Upgrading
 
 ```bash
-./n8nctl.sh set-key --provider anthropic     # primary
-./n8nctl.sh set-key --provider openrouter    # partner / fallback
-./n8nctl.sh set-key --remove                 # clear the generic key so per-provider keys apply
-./n8nctl.sh status                           # shows "keys on file" and the active model
-
-./n8nctl.sh set-model openrouter/anthropic/claude-opus-4-8   # switch when the primary is down
-./n8nctl.sh set-model anthropic/claude-opus-4-8              # and back
+./n8nctl.sh upgrade --version 2.36.0
 ```
 
-OpenRouter alone already routes each model across several upstream providers,
-so an OpenRouter key is the simplest single-key redundancy. The model name
-must be one the provider offers; check the provider's model list.
+The wrapper fetches and (if changed) offers to review the installer, takes a
+backup, runs the upstream `--upgrade`, re-applies `compose.override.yml`, and
+prints the rollback command. Downgrades are refused because database
+migrations are one-way; going back means `restore` from a snapshot taken at
+the older version. Without `--version` the latest release is looked up and
+confirmed before anything happens.
 
 ## Local-only binding and other customizations
 
@@ -82,10 +221,12 @@ binds n8n to `127.0.0.1` so nothing else on the network can reach it:
 ```bash
 cp examples/compose.override.yml n8n/compose.override.yml
 ./n8nctl.sh start        # recreates the n8n container with the new binding
+docker ps --filter name=n8n-n8n-1 --format '{{.Ports}}'   # 127.0.0.1:5678->5678/tcp
 ```
 
 Remove the `127.0.0.1:` prefix only if you deliberately want LAN access, and
-prefer a TLS reverse proxy for anything beyond that.
+prefer a TLS reverse proxy for anything beyond that. The same file is the
+place to remap the port if 5678 is taken.
 
 ## Nightly backups (macOS launchd)
 
@@ -97,41 +238,115 @@ Edit the paths inside if the project moves, then:
 cp launchd/com.n8nctl.backup.plist ~/Library/LaunchAgents/
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.n8nctl.backup.plist
 launchctl kickstart -k gui/$(id -u)/com.n8nctl.backup     # run it once now
+launchctl print gui/$(id -u)/com.n8nctl.backup | grep state   # "not running" between runs is normal
 ```
 
-Output goes to `n8n-backups/launchd.log`. To remove it:
+Output goes to `n8n-backups/launchd.log`. The job fails harmlessly if Docker
+or the drive holding the project is not available. To remove it:
 
 ```bash
 launchctl bootout gui/$(id -u)/com.n8nctl.backup
 ```
 
-n8n pauses for a few seconds during each snapshot.
+## Troubleshooting
+
+**The n8n UI appears in Dutch (or another language).** n8n 2.35 ships English
+only and reports `defaultLocale: en`; the page is served with `lang="en"`.
+What you are seeing is your browser's page-translation feature. Click the
+translate icon in the address bar, choose "Show original", then "Never
+translate this site". To confirm from outside the browser:
+
+```bash
+curl -s http://localhost:5678/setup | grep -o '<title>[^<]*</title>'
+curl -s http://localhost:5678/rest/settings | tr ',' '\n' | grep defaultLocale
+```
+
+**`Docker daemon not reachable` in preflight.** Docker Desktop is not running.
+`open -a Docker`, wait for the whale icon to settle, run preflight again.
+
+**`something already answers on port 5678`.** Another service owns the port.
+Stop it, or install with `--no-start`, remap the port in
+`n8n/compose.override.yml`, then `./n8nctl.sh start`.
+
+**Health check fails right after `backup` or `start`.** n8n takes a few
+seconds to boot after a restart. Both commands now wait for the health
+endpoint; if `status` still says "Not answering", run `./n8nctl.sh logs n8n`.
+
+**Assistant sidebar is missing or silent.** `status` should list at least one
+key under "keys on file" and a model whose provider has a key. If the generic
+key is set together with provider keys, the generic one is used for every
+provider. Check the model name exists at that provider.
+
+**Installer changed since last run.** The wrapper shows both hashes and offers
+the file for review. Read the diff of the upstream script at
+<https://github.com/n8n-io/n8n/commits/master/docker/get-n8n.sh> before
+answering yes.
+
+**Which volume holds my data?** `status` prints it. If several `*n8n-data`
+volumes exist, set `N8N_VOLUME` to the right one.
 
 ## Layout
 
 ```
 .
-├── n8nctl.sh            # the wrapper; the only code we own
-├── n8nctl.log           # append-only: installer hashes, installs, upgrades, backups
-├── n8n/                 # created by the upstream installer; treat as generated
-│   ├── compose.yml      # do not hand-edit; use compose.override.yml next to it
-│   ├── .env             # secrets (chmod 600)
+├── n8nctl.sh                 # the wrapper; the only code we own
+├── n8nctl.log                # append-only: installer hashes, installs, upgrades, backups, key changes
+├── README.md, CLAUDE.md      # this file; working rules for the repo
+├── examples/
+│   └── compose.override.yml  # binds n8n to 127.0.0.1
+├── launchd/
+│   └── com.n8nctl.backup.plist   # nightly backup + prune (macOS)
+├── test/
+│   ├── smoke.sh              # 76 offline checks, every command
+│   ├── stubs/docker, curl    # fake docker and curl used by the test
+│   └── fixtures/             # vendored upstream installer + compose file
+├── .github/workflows/ci.yml  # bash -n, shellcheck, fixture hash, smoke test on Linux + macOS
+├── n8n/                      # created by the upstream installer; treat as generated (gitignored)
+│   ├── compose.yml           # do not hand-edit; use compose.override.yml next to it
+│   ├── compose.override.yml  # ours: local customizations
+│   ├── .env                  # secrets (chmod 600): versions, keys, model, generated tokens
 │   └── searxng-settings.yml
-└── n8n-backups/<timestamp>/
-    ├── n8n-data.tar.gz  # the Docker data volume
-    ├── manifest         # version, volume name, tarball sha256, reason
-    └── compose.yml, .env, searxng-settings.yml
+└── n8n-backups/<timestamp>/  # gitignored
+    ├── n8n-data.tar.gz       # the Docker data volume
+    ├── manifest              # version, volume name, tarball sha256, reason
+    └── compose.yml, compose.override.yml, .env, searxng-settings.yml
 ```
 
-Data lives in a Docker volume named `*n8n-data`, not in `./n8n`. The wrapper
-auto-detects it; set `N8N_VOLUME` to override. `N8N_BASE_DIR` and
-`N8N_BACKUP_DIR` move the install and backup locations.
+The stack the installer starts: `n8n` (port 5678), `runners` (Code node
+sandbox), `sandbox-api` and `sandbox-runner-1` (the Assistant's privileged
+Docker-in-Docker sandbox), and `searxng` (private web search). Only 5678 is
+published. Data lives in the Docker volume `n8n_n8n-data`, database is SQLite.
 
-## Notes
+Log line format:
 
-- Only port 5678 is published. It listens on all interfaces, so on anything
-  other than a personal machine put a firewall or an authenticated TLS reverse
-  proxy in front before sharing the URL.
+```
+2026-09-19T17:51:03Z  backup  path=... reason=manual version=2.35.3 volume=n8n_n8n-data data_sha256=...
+```
+
+## Environment overrides
+
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `N8N_BASE_DIR` | Directory containing `./n8n` | `$PWD` |
+| `N8N_BACKUP_DIR` | Backup destination | `$N8N_BASE_DIR/n8n-backups` |
+| `N8N_VOLUME` | Data volume name | auto-detect `*n8n-data` |
+
+Two n8n variables worth knowing about, documented at docs.n8n.io: the
+timezone variable so schedule triggers run in local time, and the execution
+pruning variables so the SQLite database does not grow without bound. Set them
+in `n8n/.env` and apply with `./n8nctl.sh start`.
+
+## Security notes
+
+- Never print, `cat`, log or commit `n8n/.env` or anything under
+  `n8n-backups/`. To inspect `.env`, list variable names only:
+  `cut -d= -f1 n8n/.env`.
+- `.gitignore` excludes `n8n/`, `n8n-backups/` and `n8nctl.log`; `install`
+  adds the entries if missing and `preflight` checks them.
+- With the example override, port 5678 is bound to loopback. Without it, the
+  port listens on all interfaces; on anything other than a personal machine
+  put a firewall or an authenticated TLS reverse proxy in front.
+- The sandbox runner is privileged Docker-in-Docker. Never publish its ports.
 - The Assistant is in Preview. Review generated workflows before production use.
 - The bundled sandbox and SQLite are for local use. For production n8n
   recommends Daytona for the sandbox and Postgres for the database.
@@ -150,4 +365,15 @@ test/smoke.sh
 
 `test/smoke.sh` runs every command offline against stub `docker` and `curl`
 scripts in `test/stubs/`, with the upstream installer and compose file served
-from `test/fixtures/`. CI runs the same on Linux and macOS.
+from `test/fixtures/`. It passes on macOS with only `/usr/bin` on `PATH`
+(BSD grep, bash 3.2) and on Ubuntu with GNU tools. CI runs syntax checks,
+shellcheck on all scripts, a hash check on the vendored installer, and the
+smoke test on `ubuntu-24.04` and `macos-15`. Validate workflow edits with
+`actionlint` before pushing. Add a `check` line to the smoke test for any new
+behaviour.
+
+Design rules for `n8nctl.sh`: one `cmd_<name>` function per subcommand
+dispatched from the `case` at the bottom; `ok` / `warn` / `die` / `log`
+helpers; anything that changes state gets a `log` line; never pipe a download
+into a shell; portable across GNU and BSD tools (dual `stat`, `sha256sum` /
+`shasum`, `${arr[@]+"${arr[@]}"}` for bash 3.2).
