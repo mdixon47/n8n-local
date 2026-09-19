@@ -13,6 +13,7 @@ The n8n AI Assistant (a.k.a. n8n Assistant, module name `instance-ai`) is enable
 ```
 .
 ├── n8nctl.sh            # the wrapper; the only code we own
+├── README.md            # reference; learn.md is the guided tour (concepts, how-tos, drills)
 ├── n8nctl.log           # append-only: installer hashes, installs, upgrades, backups
 ├── test/                # smoke.sh + stub docker/curl + vendored installer fixtures
 ├── examples/            # compose.override.yml template (binds n8n to 127.0.0.1)

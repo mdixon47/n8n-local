@@ -20,6 +20,10 @@ wrapper that adds the safety rails the raw `curl | sh` flow lacks:
 The n8n Assistant is a bring-your-own-key feature: Anthropic, OpenAI, or
 OpenRouter. n8n itself is free; the model provider is the only cost.
 
+This file is the reference. New to n8n or to this setup? Start with
+[learn.md](learn.md): concepts, step-by-step how-tos with expected output,
+a backup drill, a first workflow and a first agent, and a glossary.
+
 ## Contents
 
 - [Requirements](#requirements)
@@ -39,6 +43,7 @@ OpenRouter. n8n itself is free; the model provider is the only cost.
 - [Environment overrides](#environment-overrides)
 - [Security notes](#security-notes)
 - [Developing the wrapper](#developing-the-wrapper)
+- [Learning guide](learn.md)
 
 ## Requirements
 
@@ -120,7 +125,6 @@ The wrapper maps onto that directly:
 | Remove a key | `./n8nctl.sh set-key --remove` or `set-key --provider X --remove` |
 | Switch the active model | `./n8nctl.sh set-model openai/gpt-5.5` |
 | See what is on file | `./n8nctl.sh status` → `Model:` and `Assistant: keys on file:` |
-
 | Store another secret | `./n8nctl.sh set-key --var daytona` (knowledge-base sandbox) or `--var brave` (web search) |
 
 `set-key` and `set-model` restart the stack when it is running so the change
@@ -283,7 +287,7 @@ restore, and why the wrapper always keeps the two together.
 ## Upgrading
 
 ```bash
-./n8nctl.sh upgrade --version 2.36.0
+./n8nctl.sh upgrade --version 2.39.8
 ```
 
 The wrapper fetches and (if changed) offers to review the installer, takes a
@@ -407,7 +411,9 @@ volumes exist, set `N8N_VOLUME` to the right one.
 .
 ├── n8nctl.sh                 # the wrapper; the only code we own
 ├── n8nctl.log                # append-only: installer hashes, installs, upgrades, backups, key changes
-├── README.md, CLAUDE.md      # this file; working rules for the repo
+├── README.md                 # this file: reference
+├── learn.md                  # concepts, how-tos, drills, glossary
+├── CLAUDE.md                 # working rules for the repo (also read by Claude Code)
 ├── examples/
 │   └── compose.override.yml  # binds n8n to 127.0.0.1
 ├── launchd/
@@ -506,8 +512,7 @@ test/smoke.sh
 
 `test/smoke.sh` runs every command offline against stub `docker` and `curl`
 scripts in `test/stubs/`, with the upstream installer and compose file served
-from `test/fixtures/`. Every new wrapper behaviour gets a `check` line there.
-It passes on macOS with only `/usr/bin` on `PATH`
+from `test/fixtures/`. It passes on macOS with only `/usr/bin` on `PATH`
 (BSD grep, bash 3.2) and on Ubuntu with GNU tools. CI runs syntax checks,
 shellcheck on all scripts, a hash check on the vendored installer, and the
 smoke test on `ubuntu-24.04` and `macos-15`. Validate workflow edits with
