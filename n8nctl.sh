@@ -17,7 +17,7 @@
 # Usage: ./n8nctl.sh <command> [options]    (see ./n8nctl.sh help)
 set -euo pipefail
 
-N8NCTL_VERSION="1.3.0"
+N8NCTL_VERSION="1.4.0"
 INSTALLER_URL="https://get.n8n.io"
 RELEASES_URL="https://api.github.com/repos/n8n-io/n8n/releases/latest"
 N8N_PORT=5678
@@ -26,6 +26,7 @@ HELPER_IMAGE="alpine:3"
 N8N_BASE_DIR="${N8N_BASE_DIR:-$PWD}"
 N8N_DIR="$N8N_BASE_DIR/n8n"
 N8N_BACKUP_DIR="${N8N_BACKUP_DIR:-$N8N_BASE_DIR/n8n-backups}"
+N8N_EXPORT_DIR="${N8N_EXPORT_DIR:-$N8N_BASE_DIR/exports}"
 LOG_FILE="$N8N_BASE_DIR/n8nctl.log"
 GITIGNORE_FILE="$N8N_BASE_DIR/.gitignore"
 
@@ -260,19 +261,19 @@ env_unset() {
 
 ensure_gitignore() {
   local entry changed=0
-  for entry in "n8n/" "n8n-backups/" "n8nctl.log"; do
+  for entry in "n8n/" "n8n-backups/" "n8nctl.log" "exports/"; do
     if ! grep -qxF "$entry" "$GITIGNORE_FILE" 2>/dev/null; then
       printf '%s\n' "$entry" >>"$GITIGNORE_FILE"
       changed=1
     fi
   done
-  (( changed )) && ok "Added missing entries to .gitignore (n8n/, n8n-backups/, n8nctl.log)"
+  (( changed )) && ok "Added missing entries to .gitignore (n8n/, n8n-backups/, n8nctl.log, exports/)"
   return 0
 }
 
 gitignore_ok() {
   local entry
-  for entry in "n8n/" "n8n-backups/" "n8nctl.log"; do
+  for entry in "n8n/" "n8n-backups/" "n8nctl.log" "exports/"; do
     grep -qxF "$entry" "$GITIGNORE_FILE" 2>/dev/null || return 1
   done
 }
@@ -820,6 +821,50 @@ cmd_backup() {
   do_backup manual
 }
 
+# Export every workflow as JSON via n8n's own CLI inside the running container.
+# Credentials are never exported: without --decrypted they are useless
+# elsewhere, and decrypted they are plaintext secrets on disk.
+cmd_export() {
+  local cid ts dest ctmp n f
+  [[ $# -eq 0 ]] || die "export takes no arguments (files go to $N8N_EXPORT_DIR/<timestamp>/)"
+  require_install
+  check_docker
+  cid="$(compose ps -q --status running n8n 2>/dev/null)"
+  [[ -n "$cid" ]] || die "n8n is not running; start it first ('./n8nctl.sh start')"
+
+  ts="$(date -u +%Y%m%d-%H%M%S)"
+  dest="$N8N_EXPORT_DIR/$ts"
+  n=2
+  while [[ -e "$dest" ]]; do dest="$N8N_EXPORT_DIR/${ts}_$n"; n=$((n + 1)); done
+  ensure_gitignore
+  mkdir -p "$dest"
+  chmod 700 "$dest"
+  ctmp="/tmp/n8nctl-export-$ts"
+
+  say "Exporting workflows from the running container ..."
+  docker exec -u node "$cid" n8n export:workflow --all --separate --pretty --output="$ctmp/workflows/" >/dev/null ||
+    die "n8n export:workflow failed (see './n8nctl.sh logs n8n')"
+  docker exec -u node "$cid" n8n export:workflow --all --pretty --output="$ctmp/all-workflows.json" >/dev/null ||
+    die "n8n export:workflow (combined) failed"
+  docker cp "$cid:$ctmp/." "$dest/" >/dev/null || die "copying the export out of the container failed"
+  docker exec -u node "$cid" rm -rf "$ctmp" >/dev/null 2>&1 || true
+
+  n=0
+  for f in "$dest"/workflows/*.json; do [[ -f "$f" ]] && n=$((n + 1)); done
+  cat >"$dest/README.txt" <<EOF
+n8n workflow export, $(date -u +%Y-%m-%dT%H:%M:%SZ), n8n $(env_get N8N_VERSION)
+workflows/          one file per workflow: import these in the n8n UI (Import from File)
+all-workflows.json  all workflows in one file: for 'n8n import:workflow --input=...'
+Credentials are NOT included. Re-create them on the target instance, then
+re-activate each imported workflow after checking its credential fields.
+Keep this folder out of git; it can contain webhook paths and hard-coded values.
+EOF
+  log "export  path=$dest workflows=$n version=$(env_get N8N_VERSION)"
+  ok "Exported $n workflow(s) to $dest"
+  say "  workflows/*.json      import one at a time in the n8n UI"
+  say "  all-workflows.json    for the n8n CLI importer"
+}
+
 # Snapshot directories, oldest first. Names are UTC timestamps (plus an
 # optional _N suffix), so lexical order is chronological.
 list_backups() {
@@ -1048,6 +1093,7 @@ Commands
   status                         Versions, key present?, containers, health, last backup
   start | stop | logs [service]  Run the stack / stop it (data kept) / follow logs
   backup                         Snapshot data volume + .env + compose files (brief n8n pause)
+  export                         Write every workflow as JSON to exports/<timestamp>/ (no credentials)
   backups [--prune N]            List snapshots; --prune keeps only the newest N
   verify <dir>                   Check a snapshot: files, sha256, versions, tarball
   restore <dir>                  Roll back to a snapshot (takes a pre-restore backup first)
@@ -1061,6 +1107,7 @@ Global options
 Environment
   N8N_BASE_DIR         Directory containing ./n8n            (default: \$PWD)
   N8N_BACKUP_DIR       Backup destination                    (default: \$N8N_BASE_DIR/n8n-backups)
+  N8N_EXPORT_DIR       Workflow export destination           (default: \$N8N_BASE_DIR/exports)
   N8N_VOLUME           Data volume name                      (default: auto-detect *n8n-data)
 
 Log: n8nctl.log next to the script (installer hashes, installs, upgrades, backups).
@@ -1096,6 +1143,7 @@ main() {
     stop)      cmd_stop "$@" ;;
     logs)      cmd_logs "$@" ;;
     backup)    cmd_backup "$@" ;;
+    export)    cmd_export "$@" ;;
     backups)   cmd_backups "$@" ;;
     verify)    cmd_verify "$@" ;;
     restore)   cmd_restore "$@" ;;

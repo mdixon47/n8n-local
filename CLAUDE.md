@@ -23,6 +23,7 @@ The n8n AI Assistant (a.k.a. n8n Assistant, module name `instance-ai`) is enable
 │   ├── compose.override.yml  # ours: local customizations, picked up by the wrapper
 │   ├── .env             # secrets: encryption key, model API key. chmod 600.
 │   └── searxng-settings.yml
+├── exports/<timestamp>/ # n8nctl export: workflows/*.json + all-workflows.json, gitignored
 └── n8n-backups/<timestamp>/
     ├── n8n-data.tar.gz  # tar of the Docker data volume
     └── compose.yml, .env, searxng-settings.yml
@@ -45,6 +46,7 @@ Always go through the wrapper rather than raw `curl | sh`:
 | Health and config check | `./n8nctl.sh status` |
 | Start / stop / logs | `./n8nctl.sh start` · `stop` · `logs [service]` |
 | Snapshot | `./n8nctl.sh backup` |
+| Export all workflows as JSON (no credentials) | `./n8nctl.sh export` → `exports/<timestamp>/` |
 | List snapshots | `./n8nctl.sh backups` |
 | Check a snapshot | `./n8nctl.sh verify n8n-backups/<timestamp>` |
 | Prune to newest N | `./n8nctl.sh backups --prune N` (deletes; confirm first) |
@@ -87,7 +89,7 @@ Do not invent environment variable names, compose service names, or image tags. 
 **Secrets**
 - Never print, `cat`, log, or commit the contents of `n8n/.env` or anything under `n8n-backups/`. To inspect `.env`, list keys only: `cut -d= -f1 n8n/.env`.
 - Never put an API key in a command line argument, a commit, or this file. Use `./n8nctl.sh set-key`.
-- `.gitignore` must contain `n8n/`, `n8n-backups/`, and `n8nctl.log`.
+- `.gitignore` must contain `n8n/`, `n8n-backups/`, `exports/`, and `n8nctl.log`. Never commit or print anything under `exports/` either; workflow JSON can hold webhook paths and hard-coded values.
 
 **Generated files**
 - Do not hand-edit `n8n/compose.yml`. The upstream installer owns it and future upgrades assume its shape. Put customizations in a `compose.override.yml` next to it, after reading the real service names from `compose.yml`.
@@ -121,6 +123,7 @@ Do not invent environment variable names, compose service names, or image tags. 
 | `N8N_BASE_DIR` | Directory containing `./n8n` | `$PWD` |
 | `N8N_BACKUP_DIR` | Backup destination | `$N8N_BASE_DIR/n8n-backups` |
 | `N8N_VOLUME` | Data volume name | auto-detect `*n8n-data` |
+| `N8N_EXPORT_DIR` | Workflow export destination | `$N8N_BASE_DIR/exports` |
 
 ## References
 

@@ -22,10 +22,11 @@ the project folder.
 13. [How-to: keep the database small](#13-how-to-keep-the-database-small)
 14. [How-to: read the log](#14-how-to-read-the-log)
 15. [How-to: uninstall cleanly](#15-how-to-uninstall-cleanly)
-16. [How the wrapper works inside](#16-how-the-wrapper-works-inside)
-17. [Glossary](#17-glossary)
-18. [FAQ](#18-faq)
-19. [Further reading](#19-further-reading)
+16. [How-to: move workflows to n8n Cloud](#16-how-to-move-workflows-to-n8n-cloud)
+17. [How the wrapper works inside](#17-how-the-wrapper-works-inside)
+18. [Glossary](#18-glossary)
+19. [FAQ](#19-faq)
+20. [Further reading](#20-further-reading)
 
 ## 1. What you have here
 
@@ -418,7 +419,36 @@ Backups: .../<timestamp>`. The containers, the data volume and the `n8n/`
 folder are gone; the snapshots and the log stay. `./n8nctl.sh install`
 followed by `restore` brings it all back.
 
-## 16. How the wrapper works inside
+## 16. How-to: move workflows to n8n Cloud
+
+Your local account and an n8n Cloud account are separate and never sync.
+Moving work is an export here and an import there.
+
+```bash
+./n8nctl.sh export
+```
+
+Expected: `Exporting workflows from the running container ...`, then
+`+ Exported 3 workflow(s) to .../exports/<timestamp>` and two hint lines.
+Inside the folder: `workflows/` with one JSON file per workflow,
+`all-workflows.json`, and a `README.txt`.
+
+On n8n Cloud:
+
+1. Create the credentials the workflows need first (Slack, Notion, and so
+   on). Credentials are never part of an export.
+2. Open a workflow's menu and choose Import from File. Pick one file from
+   `workflows/`. Repeat per workflow.
+3. Open each imported workflow, check every node that shows a missing
+   credential, pick the Cloud one, run it once manually, then activate it.
+   Imports always arrive deactivated.
+
+Two cautions. Webhook URLs change: a Webhook node's public address on Cloud
+is different, so update anything that calls it. And the export folder is
+gitignored on purpose; workflow JSON can contain hard-coded values, so do
+not commit it or paste it into a chat.
+
+## 17. How the wrapper works inside
 
 Reading order for [n8nctl.sh](n8nctl.sh), top to bottom:
 
@@ -461,7 +491,7 @@ To change the wrapper: edit, then `bash -n n8nctl.sh && shellcheck n8nctl.sh
 && test/smoke.sh`. The smoke test runs every command against fake `docker`
 and `curl` in about ten seconds, and CI repeats it on Linux and macOS.
 
-## 17. Glossary
+## 18. Glossary
 
 - **Agent Builder**: the editor for an agent: model, instructions, tools,
   skills, memory, schedules, channels.
@@ -487,7 +517,7 @@ and `curl` in about ten seconds, and CI repeats it on Linux and macOS.
 - **Volume**: the Docker volume `n8n_n8n-data` holding the database.
 - **WEBHOOK_URL**: the public base URL n8n puts into webhook addresses.
 
-## 18. FAQ
+## 19. FAQ
 
 **Is n8n free?** The Community edition is free to self-host. The only cost
 here is the model provider.
@@ -499,6 +529,10 @@ here is the model provider.
 
 **Where is the key created?** At the provider's dashboard, not in n8n. See
 the README's key table.
+
+**How do I connect my local account to n8n Cloud?** You cannot; they are
+separate systems. Register the Community edition for free extras (Settings,
+Usage and plan, Unlock), and move workflows with `export` (section 16).
 
 **Can two providers run at once?** For the Assistant, one model at a time
 with a manual switch (section 9). Agents each carry their own credential.
@@ -517,7 +551,7 @@ back with `restore` from a snapshot at the older version.
 **What happens in n8n 3.0?** Docker becomes the only install path, and the
 "Any workflow" caller policy is removed. This repo is already Docker-only.
 
-## 19. Further reading
+## 20. Further reading
 
 - n8n one-line setup: <https://docs.n8n.io/deploy/host-n8n/install-options/one-line-setup>
 - Set up the n8n Assistant, including Enable agents: <https://docs.n8n.io/deploy/host-n8n/configure-n8n/set-up-n8n-assistant>

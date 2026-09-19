@@ -10,6 +10,22 @@ case "$1" in
       ls) ls -1 "$V" 2>/dev/null; exit 0 ;;
       rm) rm -rf "${V:?}/${3:?}"; exit 0 ;;
     esac ;;
+  exec)
+    # docker exec -u node <id> <cmd...>; container paths map to $STUB_STATE/container/...
+    shift; [[ "$1" == "-u" ]] && shift 2; shift   # drop -u node and the container id
+    C="$STUB_STATE/container"
+    case "$1" in
+      n8n)
+        out=""; sep=0
+        for a in "$@"; do case "$a" in --output=*) out="${a#--output=}" ;; --separate) sep=1 ;; esac; done
+        [[ -n "$out" ]] || { echo "stub: no --output" >&2; exit 1; }
+        if (( sep )); then mkdir -p "$C$out"; printf '{"name":"a"}' > "$C$out/a.json"; printf '{"name":"b"}' > "$C$out/b.json"
+        else mkdir -p "$(dirname "$C$out")"; printf '[{"name":"a"},{"name":"b"}]' > "$C$out"; fi
+        exit 0 ;;
+      rm) rm -rf "${C:?}$3"; exit 0 ;;
+    esac; echo "stub docker exec: unhandled $*" >&2; exit 1 ;;
+  cp)
+    src="${2#*:}"; cp -R "$STUB_STATE/container$src" "$3"; exit 0 ;;
   run)
     # parse -v src:dst[:ro] mounts, then run the trailing command with paths mapped
     shift; declare -a mounts=(); cmd=()

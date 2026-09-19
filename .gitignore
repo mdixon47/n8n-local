@@ -4,3 +4,4 @@ n8n/
 n8n-backups/
 # Append-only operations log
 n8nctl.log
+exports/

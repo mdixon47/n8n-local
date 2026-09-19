@@ -35,6 +35,7 @@ a backup drill, a first workflow and a first agent, and a glossary.
 - [Everyday commands](#everyday-commands)
 - [Running day to day](#running-day-to-day)
 - [Backups, verify, restore](#backups-verify-restore)
+- [Exporting workflows](#exporting-workflows-for-n8n-cloud-or-another-instance)
 - [Upgrading](#upgrading)
 - [Local-only binding and other customizations](#local-only-binding-and-other-customizations)
 - [Nightly backups (macOS launchd)](#nightly-backups-macos-launchd)
@@ -225,6 +226,7 @@ Agent Builder and republishing it.
 | Health and config | `./n8nctl.sh status` |
 | Start / stop / follow logs | `./n8nctl.sh start` · `stop` · `logs [service]` |
 | Snapshot | `./n8nctl.sh backup` |
+| Export all workflows as JSON | `./n8nctl.sh export` |
 | List snapshots | `./n8nctl.sh backups` |
 | Check a snapshot | `./n8nctl.sh verify n8n-backups/<timestamp>` |
 | Keep only the newest N snapshots | `./n8nctl.sh backups --prune N` |
@@ -283,6 +285,29 @@ models, tool credentials, the episodic-memory OpenAI credential) live in the
 data volume and are inside every snapshot. They are encrypted with the key in
 `.env`, which is why a snapshot without its `.env` cannot be decrypted after
 restore, and why the wrapper always keeps the two together.
+
+## Exporting workflows (for n8n Cloud or another instance)
+
+A self-hosted install and n8n Cloud do not share accounts and do not sync.
+To move workflows, export them here and import them there:
+
+```bash
+./n8nctl.sh export
+```
+
+This runs n8n's own exporter inside the running container and writes to
+`exports/<timestamp>/`, which is gitignored and mode 700:
+
+- `workflows/<name>.json`, one file per workflow, for the n8n UI's
+  *Import from File* (one workflow per import)
+- `all-workflows.json`, everything in one file, for
+  `n8n import:workflow --input=...` on another self-hosted instance
+- `README.txt` with the version and the caveats below
+
+Credentials are never exported. Create them on the target first, import the
+workflows, check each node's credential field, then activate; imports arrive
+deactivated. Exported JSON can contain webhook paths and hard-coded values,
+so keep the folder out of git and out of chats. `N8N_EXPORT_DIR` moves it.
 
 ## Upgrading
 
@@ -428,6 +453,7 @@ volumes exist, set `N8N_VOLUME` to the right one.
 │   ├── compose.override.yml  # ours: local customizations
 │   ├── .env                  # secrets (chmod 600): versions, keys, model, generated tokens
 │   └── searxng-settings.yml
+├── exports/<timestamp>/      # gitignored: workflows/*.json, all-workflows.json, README.txt
 └── n8n-backups/<timestamp>/  # gitignored
     ├── n8n-data.tar.gz       # the Docker data volume
     ├── manifest              # version, volume name, tarball sha256, reason
@@ -452,6 +478,7 @@ Log line format:
 | `N8N_BASE_DIR` | Directory containing `./n8n` | `$PWD` |
 | `N8N_BACKUP_DIR` | Backup destination | `$N8N_BASE_DIR/n8n-backups` |
 | `N8N_VOLUME` | Data volume name | auto-detect `*n8n-data` |
+| `N8N_EXPORT_DIR` | Workflow export destination | `$N8N_BASE_DIR/exports` |
 
 n8n variables this setup touches, all set in `n8n/.env` and applied with
 `./n8nctl.sh start`:
@@ -480,8 +507,8 @@ laptop. Documented at
 - Never print, `cat`, log or commit `n8n/.env` or anything under
   `n8n-backups/`. To inspect `.env`, list variable names only:
   `cut -d= -f1 n8n/.env`.
-- `.gitignore` excludes `n8n/`, `n8n-backups/` and `n8nctl.log`; `install`
-  adds the entries if missing and `preflight` checks them.
+- `.gitignore` excludes `n8n/`, `n8n-backups/`, `exports/` and `n8nctl.log`;
+  `install` and `export` add the entries if missing and `preflight` checks them.
 - With the example override, port 5678 is bound to loopback. Without it, the
   port listens on all interfaces; on anything other than a personal machine
   put a firewall or an authenticated TLS reverse proxy in front.

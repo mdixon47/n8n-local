@@ -115,6 +115,22 @@ check       "restore put data back"                  test "$(cat "$VOL/marker")"
 check       "restore made a safety backup"           bash -c "grep -q 'reason=pre-restore' '$N8N_BASE_DIR'/n8n-backups/*/manifest"
 check_fails "verify catches tampering"               bash -c "cp -R '$B1' '$WORK/tampered' && echo x >> '$WORK/tampered/n8n-data.tar.gz' && \"$CTL\" verify '$WORK/tampered'"
 
+# --- export -------------------------------------------------------------------
+check       "export"                                 "$CTL" export
+X=""; for d in "$N8N_BASE_DIR"/exports/*/; do X="${d%/}"; break; done
+nx=0; for f in "$X"/workflows/*.json; do [[ -f "$f" ]] && nx=$((nx+1)); done
+check       "export: per-workflow files"             test "$nx" -eq 2
+check       "export: combined file"                  test -s "$X/all-workflows.json"
+check       "export: README present"                 grep -q 'Credentials are NOT included' "$X/README.txt"
+check       "export: dir is 700"                     test "$(perm "$X")" = "drwx------"
+check       "export: gitignore gained exports/"      grep -qx 'exports/' "$N8N_BASE_DIR/.gitignore"
+check       "export: logged with count"              grep -q 'export  path=.* workflows=2' "$N8N_BASE_DIR/n8nctl.log"
+check       "export: container temp cleaned"         bash -c "! ls -d '$STUB_STATE'/container/tmp/n8nctl-export-* 2>/dev/null | grep -q ."
+check_fails "export rejects arguments"               "$CTL" export --foo
+"$CTL" stop >/dev/null
+check_fails "export needs n8n running"               "$CTL" export
+"$CTL" start >/dev/null
+
 # --- prune --------------------------------------------------------------------
 check       "prune keeps newest 1"                   "$CTL" -y backups --prune 1
 check       "one snapshot left"                      test "$(count_backups)" -eq 1
