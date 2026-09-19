@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # stub docker for n8nctl smoke tests
-S="$STUB_ROOT"; V="$STUB_STATE/volumes"
+V="$STUB_STATE/volumes"
 echo "docker $*" >> "$STUB_STATE/docker.calls"
 case "$1" in
   --version) echo "Docker version 27.1.0, build abc"; exit 0 ;;
@@ -8,7 +8,7 @@ case "$1" in
   volume)
     case "$2" in
       ls) ls -1 "$V" 2>/dev/null; exit 0 ;;
-      rm) rm -rf "$V/$3"; exit 0 ;;
+      rm) rm -rf "${V:?}/${3:?}"; exit 0 ;;
     esac ;;
   run)
     # parse -v src:dst[:ro] mounts, then run the trailing command with paths mapped

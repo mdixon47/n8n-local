@@ -1,21 +1,55 @@
 name: ci
+
 on:
   push:
+    branches: [main]
   pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint-and-test:
+    name: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - name: Install shellcheck (macOS)
-        if: runner.os == 'macOS'
-        run: brew install shellcheck
+
+      - name: Ensure shellcheck
+        shell: bash
+        run: |
+          if ! command -v shellcheck >/dev/null 2>&1; then
+            if [ "$RUNNER_OS" = "macOS" ]; then brew install shellcheck
+            else sudo apt-get update -q && sudo apt-get install -y -q shellcheck; fi
+          fi
+          shellcheck --version
+
       - name: Syntax
-        run: bash -n n8nctl.sh
+        shell: bash
+        run: bash -n n8nctl.sh test/smoke.sh test/stubs/curl test/stubs/docker
+
       - name: ShellCheck
-        run: shellcheck n8nctl.sh
+        shell: bash
+        run: shellcheck n8nctl.sh test/smoke.sh test/stubs/curl test/stubs/docker
+
+      - name: Fixture integrity
+        shell: bash
+        run: |
+          # The smoke test asserts this hash was logged; keep the vendored installer in sync.
+          want=b4a999179859558f4bdc22305f714675ba142adeaa626c6ffba84f0e11147612
+          if command -v sha256sum >/dev/null 2>&1; then got=$(sha256sum test/fixtures/get-n8n.sh | cut -d' ' -f1)
+          else got=$(shasum -a 256 test/fixtures/get-n8n.sh | cut -d' ' -f1); fi
+          [ "$got" = "$want" ] || { echo "fixture hash $got != $want"; exit 1; }
+
       - name: Smoke test (stubbed docker and curl)
+        shell: bash
         run: test/smoke.sh

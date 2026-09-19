@@ -6,7 +6,7 @@ args=("$@")
 for ((i=0;i<${#args[@]};i++)); do
   case "${args[i]}" in
     -o) out="${args[i+1]}"; ((i++)) ;;
-    http*|https*) url="${args[i]}" ;;
+    http*) url="${args[i]}" ;;
   esac
 done
 case "$url" in

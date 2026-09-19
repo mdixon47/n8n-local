@@ -22,7 +22,11 @@ check() {  # check "label" cmd...  -> expects success
 check_fails() {  # expects non-zero exit
   if "${@:2}" >/dev/null 2>&1; then fail=$((fail+1)); echo "FAIL $1 (expected failure)"; else pass=$((pass+1)); echo "ok   $1"; fi
 }
-perm() { ls -ld "$1" | cut -c1-10; }   # portable; avoids stat flag differences
+# Permission string; avoids GNU/BSD stat flag differences.
+# shellcheck disable=SC2012
+perm() { ls -ld "$1" | cut -c1-10; }
+first_backup() { local d; for d in "$N8N_BASE_DIR"/n8n-backups/*/; do printf '%s\n' "${d%/}"; return; done; }
+count_backups() { local d n=0; for d in "$N8N_BASE_DIR"/n8n-backups/*/; do [[ -d "$d" ]] && n=$((n+1)); done; printf '%s\n' "$n"; }
 
 # --- preflight / install ------------------------------------------------------
 check       "preflight passes"                       "$CTL" preflight
@@ -51,13 +55,13 @@ check       "key never in log"                       bash -c "! grep -q 'sk-test
 echo "before" > "$VOL/marker"
 check       "backup"                                 "$CTL" backup
 check       "n8n restarted after backup"             test -f "$STUB_STATE/running"
-B1="$(ls -1d "$N8N_BASE_DIR"/n8n-backups/*/ | head -1)"; B1="${B1%/}"
+B1="$(first_backup)"
 check       "backup has tarball"                     test -f "$B1/n8n-data.tar.gz"
 check       "backup .env is 600"                     test "$(perm "$B1/.env")" = "-rw-------"
 check       "backup manifest version"                grep -qx 'n8n_version=2.35.3' "$B1/manifest"
 check       "verify passes"                          "$CTL" verify "$B1"
-check       "second backup same second gets suffix"  bash -c "\"$CTL\" backup && [ \$(ls -1d '$N8N_BASE_DIR'/n8n-backups/*/ | wc -l) -eq 2 ]"
-check       "backups lists two"                      bash -c "\"$CTL\" backups | grep -c '^2026\|^20[0-9][0-9]' | grep -qx 2"
+check       "second backup creates a new snapshot"    bash -c "\"$CTL\" backup" && check "two snapshots exist" test "$(count_backups)" -eq 2
+check       "backups lists two"                      bash -c "[ \$(\"$CTL\" backups | grep -cE '^[0-9]{8}-[0-9]{6}') -eq 2 ]"
 echo "after" > "$VOL/marker"
 check       "restore -y"                             "$CTL" -y restore "$B1"
 check       "restore put data back"                  test "$(cat "$VOL/marker")" = "before"
@@ -65,7 +69,8 @@ check       "restore made a safety backup"           bash -c "grep -q 'reason=pr
 check_fails "verify catches tampering"               bash -c "cp -R '$B1' '$WORK/tampered' && echo x >> '$WORK/tampered/n8n-data.tar.gz' && \"$CTL\" verify '$WORK/tampered'"
 
 # --- prune --------------------------------------------------------------------
-check       "prune keeps newest 1"                   bash -c "\"$CTL\" -y backups --prune 1 && [ \$(ls -1d '$N8N_BASE_DIR'/n8n-backups/*/ | wc -l) -eq 1 ]"
+check       "prune keeps newest 1"                   "$CTL" -y backups --prune 1
+check       "one snapshot left"                      test "$(count_backups)" -eq 1
 check       "prune nothing to do"                    "$CTL" -y backups --prune 5
 check_fails "prune rejects 0"                        "$CTL" -y backups --prune 0
 check_fails "prune refuses without -y off a tty"     bash -c "\"$CTL\" backup && \"$CTL\" backups --prune 1"
