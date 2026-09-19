@@ -1,5 +1,8 @@
 # n8n-local
 
+A safe local install of n8n for building workflows, the n8n Assistant, and
+n8n Agents.
+
 Self-hosted [n8n](https://n8n.io) (Community edition) on Docker, installed with
 n8n's official one-line installer and driven by `n8nctl.sh`, a single-file bash
 wrapper that adds the safety rails the raw `curl | sh` flow lacks:
@@ -23,6 +26,7 @@ OpenRouter. n8n itself is free; the model provider is the only cost.
 - [Quick start](#quick-start)
 - [Getting a model key](#getting-a-model-key)
 - [Keys and models](#keys-and-models)
+- [Agents (Preview)](#agents-preview)
 - [Two providers: a partner key and a fallback](#two-providers-a-partner-key-and-a-fallback)
 - [Everyday commands](#everyday-commands)
 - [Running day to day](#running-day-to-day)
@@ -51,10 +55,15 @@ OpenRouter. n8n itself is free; the model provider is the only cost.
 ```bash
 open -a Docker                            # macOS: start Docker Desktop first
 ./n8nctl.sh preflight                     # Docker, compose v2, curl, port 5678, .gitignore
-./n8nctl.sh install --version 2.35.3      # pinned install; review the installer when asked
+./n8nctl.sh install --version 2.39.8      # pinned install; review the installer when asked
 ./n8nctl.sh set-key --provider anthropic  # hidden prompt for the Assistant model key
-./n8nctl.sh status                        # health, versions, keys on file, active model
+./n8nctl.sh modules --enable agents       # optional: turn on the Agents tab (Preview)
+./n8nctl.sh status                        # health, versions, keys, active model, modules
 ```
+
+Pick a current release for `--version`; `./n8nctl.sh upgrade` with no version
+prints the latest. Agents are in Preview and change with nearly every release,
+so for Agents newer is materially better.
 
 Then open <http://localhost:5678>, create the owner account, and confirm the
 Assistant sidebar responds. The first install pulls five images and takes a
@@ -112,11 +121,72 @@ The wrapper maps onto that directly:
 | Switch the active model | `./n8nctl.sh set-model openai/gpt-5.5` |
 | See what is on file | `./n8nctl.sh status` → `Model:` and `Assistant: keys on file:` |
 
+| Store another secret | `./n8nctl.sh set-key --var daytona` (knowledge-base sandbox) or `--var brave` (web search) |
+
 `set-key` and `set-model` restart the stack when it is running so the change
 applies immediately. `set-model` warns if no key exists for that provider.
 Provider and model can also be set in the n8n UI under the instance AI
 settings; keys stored there are encrypted in the database and take priority
 over `.env`.
+
+**What `.env` governs and what the credential store governs.** The keys above
+are for the n8n Assistant only. Everything an agent or a workflow uses lives
+in n8n's credential store, encrypted in the database with the key in `.env`:
+each agent's own model credential (chosen when you create the agent), tool
+credentials (Slack, Notion, GitHub and so on), and the OpenAI credential that
+episodic memory requires. `set-key` and `set-model` never touch those.
+The Brave variable is spelled `INSTANCE_AI_BRAVE_SEARCH_API_KEY`, without the
+`N8N_` prefix the other variables have; the wrapper gets it right for you.
+
+## Agents (Preview)
+
+From n8n 2.32.3 the **Agents** tab lets you define an agent once (model,
+instructions, tools, skills, knowledge, memory) and use it from a chat, from a
+workflow through the *Message an Agent* node, on a schedule, as a sub-agent of
+another agent, or from a channel such as Slack, Telegram or Linear. It is a
+different thing from the *AI Agent node* inside a workflow and from the n8n
+Assistant that helps you build. Agents are available on self-hosted Community
+edition, not on self-hosted Enterprise yet.
+
+**Turning it on.** At 2.35.3 the `agents` module is opt-in; the installer does
+not enable it. The Assistant's own module, `instance-ai`, loads by default.
+
+```bash
+./n8nctl.sh modules --enable agents     # writes N8N_ENABLED_MODULES=agents and restarts
+./n8nctl.sh status                      # "Agents:     enabled (Preview)"
+```
+
+`modules` validates the name against the list n8n 2.35.3 accepts, because an
+unknown module name stops n8n from starting. Agents need regular mode, which
+is what this install runs; queue mode is not supported for agents yet.
+
+**What each agent needs.** Its own model credential, picked in the Agent
+Builder when you choose a provider and model. The Assistant key in `.env` is
+not used for agents, and `set-model` does not affect them.
+
+**What works here without anything extra:** building agents by hand or with
+the Assistant, chatting with them, *Message an Agent* in workflows, schedules,
+sub-agents, sessions, and approvals on sensitive tools.
+
+**What needs more than this local setup** (the repo's stance is to document
+these rather than widen the install; see Security notes):
+
+| Feature | Needs | Why it is out of the box here |
+| --- | --- | --- |
+| Episodic memory (recall across sessions) | An OpenAI credential in the UI, even if the agent runs on Anthropic | A UI step, no config change; just expect the prompt |
+| Knowledge base (upload and search files) | `N8N_AGENTS_AI_SANDBOX_ENABLED=true`, `N8N_AGENTS_AI_SANDBOX_PROVIDER=daytona`, `DAYTONA_API_URL`, `DAYTONA_API_KEY` | Daytona is a cloud sandbox; the bundled `n8n-sandbox` cannot do this |
+| Channels (Slack, Telegram, Linear) | A public HTTPS `WEBHOOK_URL` | This install binds to 127.0.0.1; put a tunnel in front, see Local-only binding |
+
+To add the Daytona key safely: `./n8nctl.sh set-key --var daytona`, then put
+the three other variables in `n8n/.env` and `./n8nctl.sh start`.
+
+Every agent turn is one execution and every conversation is a stored session,
+all of it in the data volume. Backups cover it; execution pruning (see
+Environment overrides) matters more once agents are in use.
+
+Upstream docs: [Build and manage agents](https://docs.n8n.io/build/build-and-manage-agents),
+[Enable agents](https://docs.n8n.io/deploy/host-n8n/configure-n8n/set-up-n8n-assistant#enable-agents),
+[Release notes](https://docs.n8n.io/release-notes/).
 
 ## Two providers: a partner key and a fallback
 
@@ -138,6 +208,10 @@ If the generic key is still set, `set-key --provider` warns you: the generic
 key wins for every provider, so a model switch would send the wrong key.
 The model name must be one the provider offers; check its model list.
 
+Agents are unaffected by `set-model`. An agent's model is fixed per agent;
+failing an agent over to another provider means editing the agent in the
+Agent Builder and republishing it.
+
 ## Everyday commands
 
 | Task | Command |
@@ -152,6 +226,8 @@ The model name must be one the provider offers; check its model list.
 | Keep only the newest N snapshots | `./n8nctl.sh backups --prune N` |
 | Roll back | `./n8nctl.sh restore n8n-backups/<timestamp>` |
 | Upgrade (backs up first) | `./n8nctl.sh upgrade --version X.Y.Z` |
+| Show or change modules | `./n8nctl.sh modules` · `modules --enable agents` · `modules --disable agents` |
+| Store the Daytona or Brave key | `./n8nctl.sh set-key --var daytona` · `set-key --var brave` |
 | Remove everything | `./n8nctl.sh uninstall` |
 | Skip prompts | add `-y` / `--yes` |
 | Help | `./n8nctl.sh help` |
@@ -198,6 +274,12 @@ restored together.
 
 `backups --prune N` deletes all but the newest N snapshots after confirmation.
 
+Agent definitions, publish history, sessions, and every credential (agent
+models, tool credentials, the episodic-memory OpenAI credential) live in the
+data volume and are inside every snapshot. They are encrypted with the key in
+`.env`, which is why a snapshot without its `.env` cannot be decrypted after
+restore, and why the wrapper always keeps the two together.
+
 ## Upgrading
 
 ```bash
@@ -210,6 +292,15 @@ prints the rollback command. Downgrades are refused because database
 migrations are one-way; going back means `restore` from a snapshot taken at
 the older version. Without `--version` the latest release is looked up and
 confirmed before anything happens.
+
+**Before n8n 3.0 (October 2026).** Two things the release notes announce:
+npm/npx installs stop working (Docker only, which this repo already is), and
+the workflow setting "This workflow can be called by → Any workflow" is
+removed. That setting is deprecated now and matters if you wire sub-workflows
+as agent tools. Checklist: `./n8nctl.sh backup`, switch any sub-workflow off
+"Any workflow" to an explicit caller list, then `./n8nctl.sh upgrade`.
+Preview features such as Agents add database migrations, which is the reason
+the wrapper refuses downgrades.
 
 ## Local-only binding and other customizations
 
@@ -227,6 +318,15 @@ docker ps --filter name=n8n-n8n-1 --format '{{.Ports}}'   # 127.0.0.1:5678->5678
 Remove the `127.0.0.1:` prefix only if you deliberately want LAN access, and
 prefer a TLS reverse proxy for anything beyond that. The same file is the
 place to remap the port if 5678 is taken.
+
+**Channels and public webhooks.** Agent channels (Slack, Telegram, Linear)
+and any webhook that an outside service must call need a public HTTPS URL,
+set in `n8n/.env` as `WEBHOOK_URL`. For a personal machine, keep the loopback
+binding and put a tunnel in front of it: Cloudflare Tunnel, Tailscale Funnel,
+or ngrok pointed at `http://127.0.0.1:5678`. Set `WEBHOOK_URL` to the tunnel's
+`https://` hostname and `./n8nctl.sh start`. Do not widen the bind to get
+there. Channels are documented to be unreliable in queue mode, which this
+install does not use.
 
 ## Nightly backups (macOS launchd)
 
@@ -282,6 +382,22 @@ the file for review. Read the diff of the upstream script at
 <https://github.com/n8n-io/n8n/commits/master/docker/get-n8n.sh> before
 answering yes.
 
+**No Agents tab.** Run `./n8nctl.sh status`. The `Agents:` line says whether
+`agents` is in `N8N_ENABLED_MODULES` and whether the version is at least
+2.32.3. Enable with `./n8nctl.sh modules --enable agents`. Agents are not
+available on self-hosted Enterprise. The tab needs a fresh page load after the
+restart.
+
+**Knowledge upload fails, or a channel will not connect.** The knowledge base
+needs the Daytona sandbox and channels need a public `WEBHOOK_URL`; the
+bundled sandbox and the loopback binding cannot provide either. See
+[Agents (Preview)](#agents-preview) for the variables and the tunnel approach.
+
+**n8n will not start after editing modules.** An unknown name in
+`N8N_ENABLED_MODULES` stops n8n. `./n8nctl.sh logs n8n` shows the name;
+`./n8nctl.sh modules --disable <name>` removes it, or use `modules` to see the
+accepted names. The wrapper only writes names it knows.
+
 **Which volume holds my data?** `status` prints it. If several `*n8n-data`
 volumes exist, set `N8N_VOLUME` to the right one.
 
@@ -297,7 +413,7 @@ volumes exist, set `N8N_VOLUME` to the right one.
 ├── launchd/
 │   └── com.n8nctl.backup.plist   # nightly backup + prune (macOS)
 ├── test/
-│   ├── smoke.sh              # 76 offline checks, every command
+│   ├── smoke.sh              # offline checks for every command
 │   ├── stubs/docker, curl    # fake docker and curl used by the test
 │   └── fixtures/             # vendored upstream installer + compose file
 ├── .github/workflows/ci.yml  # bash -n, shellcheck, fixture hash, smoke test on Linux + macOS
@@ -331,10 +447,27 @@ Log line format:
 | `N8N_BACKUP_DIR` | Backup destination | `$N8N_BASE_DIR/n8n-backups` |
 | `N8N_VOLUME` | Data volume name | auto-detect `*n8n-data` |
 
-Two n8n variables worth knowing about, documented at docs.n8n.io: the
-timezone variable so schedule triggers run in local time, and the execution
-pruning variables so the SQLite database does not grow without bound. Set them
-in `n8n/.env` and apply with `./n8nctl.sh start`.
+n8n variables this setup touches, all set in `n8n/.env` and applied with
+`./n8nctl.sh start`:
+
+| Variable | Purpose |
+| --- | --- |
+| `N8N_ENABLED_MODULES` | Opt-in modules, comma separated; `agents` for the Agents tab. Managed by `modules` |
+| `N8N_DISABLED_MODULES` | Turns a default module off, e.g. `instance-ai` to disable the Assistant |
+| `N8N_INSTANCE_AI_MODEL`, `N8N_INSTANCE_AI_MODEL_API_KEY`, `*_API_KEY` | Assistant model and keys; see Keys and models |
+| `N8N_AGENTS_AI_SANDBOX_ENABLED`, `N8N_AGENTS_AI_SANDBOX_PROVIDER` | Agent knowledge base; `true` and `daytona` |
+| `DAYTONA_API_URL`, `DAYTONA_API_KEY` | Daytona account for the knowledge base sandbox |
+| `WEBHOOK_URL` | Public HTTPS URL for channels and external webhooks |
+| `GENERIC_TIMEZONE` | Timezone for schedule triggers, e.g. `Europe/Amsterdam` |
+| `EXECUTIONS_DATA_PRUNE` | `true` to prune old executions (default on) |
+| `EXECUTIONS_DATA_MAX_AGE` | Hours to keep executions; default 336 (14 days) |
+| `EXECUTIONS_DATA_PRUNE_MAX_COUNT` | Maximum executions kept; default 10000 |
+
+Every agent turn is an execution and stores a session, so the SQLite database
+grows faster with agents in use. A retention such as `EXECUTIONS_DATA_MAX_AGE=168`
+(7 days) and `EXECUTIONS_DATA_PRUNE_MAX_COUNT=5000` keeps it in check on a
+laptop. Documented at
+[Manage execution data](https://docs.n8n.io/deploy/host-n8n/configure-n8n/scaling/manage-execution-data/).
 
 ## Security notes
 
@@ -347,7 +480,15 @@ in `n8n/.env` and apply with `./n8nctl.sh start`.
   port listens on all interfaces; on anything other than a personal machine
   put a firewall or an authenticated TLS reverse proxy in front.
 - The sandbox runner is privileged Docker-in-Docker. Never publish its ports.
-- The Assistant is in Preview. Review generated workflows before production use.
+- The Assistant and Agents are in Preview. Review generated workflows before
+  production use.
+- Agents act on your behalf. Mark write-capable tools (send, post, delete,
+  pay) as requiring approval in the Agent Builder, review the Sessions tab to
+  see which tools were called, and treat anything an agent reads from Slack,
+  Notion, email or the web as untrusted text that may try to steer it.
+- The knowledge base is an opt-in that sends uploaded files to a Daytona
+  cloud sandbox. Enable it deliberately, with `set-key --var daytona` for the
+  key, and know that those files leave the machine.
 - The bundled sandbox and SQLite are for local use. For production n8n
   recommends Daytona for the sandbox and Postgres for the database.
 - From n8n 3.0 (October 2026), npm/npx installs stop working; Docker is the
@@ -365,7 +506,8 @@ test/smoke.sh
 
 `test/smoke.sh` runs every command offline against stub `docker` and `curl`
 scripts in `test/stubs/`, with the upstream installer and compose file served
-from `test/fixtures/`. It passes on macOS with only `/usr/bin` on `PATH`
+from `test/fixtures/`. Every new wrapper behaviour gets a `check` line there.
+It passes on macOS with only `/usr/bin` on `PATH`
 (BSD grep, bash 3.2) and on Ubuntu with GNU tools. CI runs syntax checks,
 shellcheck on all scripts, a hash check on the vendored installer, and the
 smoke test on `ubuntu-24.04` and `macos-15`. Validate workflow edits with

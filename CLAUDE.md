@@ -39,6 +39,8 @@ Always go through the wrapper rather than raw `curl | sh`:
 | Fresh install (pinned) | `./n8nctl.sh install --version 2.35.3` |
 | Set the AI Assistant key | `./n8nctl.sh set-key [--provider anthropic\|openai\|openrouter]` (hidden prompt, or pipe the key on stdin); `--remove` deletes it |
 | Switch the Assistant model | `./n8nctl.sh set-model <provider>/<model>` |
+| Store the Daytona / Brave key | `./n8nctl.sh set-key --var daytona` · `--var brave` |
+| Show / enable / disable modules | `./n8nctl.sh modules [--enable agents \| --disable agents]` (edits `N8N_ENABLED_MODULES` only) |
 | Health and config check | `./n8nctl.sh status` |
 | Start / stop / logs | `./n8nctl.sh start` · `stop` · `logs [service]` |
 | Snapshot | `./n8nctl.sh backup` |
@@ -68,7 +70,10 @@ Upstream installer flags: `--version [X]`, `--no-start`, `--upgrade`, `--help`. 
 - Windows: run under WSL with Docker Desktop's WSL2 integration. Git Bash is unverified upstream.
 - The stack includes n8n, a bundled code sandbox (`n8n-sandbox`), a bundled private web search (SearXNG), and a task-runners sidecar. Only port `5678` is published; the rest stay on the internal network.
 - The Assistant stays off until a model key exists. Generic key variable: `N8N_INSTANCE_AI_MODEL_API_KEY` in `./n8n/.env`; when it is empty n8n falls back to the active provider's own variable: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`. The generic key overrides all of them. The model is `N8N_INSTANCE_AI_MODEL` in `provider/model` form (default `anthropic/claude-opus-4-8`; providers: anthropic, openai, openrouter). One model is active at a time; there is no automatic failover. Keys can also be set in the UI under the instance AI settings.
-- Optional: `INSTANCE_AI_BRAVE_SEARCH_API_KEY` in `.env` switches web search from the bundled tool to Brave.
+- Optional: `INSTANCE_AI_BRAVE_SEARCH_API_KEY` in `.env` switches web search from the bundled tool to Brave. No `N8N_` prefix.
+- **Agents (Preview)**, from n8n 2.32.3, self-hosted Community only (not Enterprise). Module `agents` is opt-in via `N8N_ENABLED_MODULES`; the installer does not set it. `instance-ai` is a default module (loads without being listed; only `N8N_DISABLED_MODULES` turns it off). Unknown names in `N8N_ENABLED_MODULES` stop n8n from starting; `KNOWN_MODULES` in the wrapper mirrors `modules.config.ts` at 2.35.3. Each agent has its own model credential in the UI; the Assistant key and `set-model` do not apply to agents. Episodic memory needs an OpenAI credential. Knowledge base needs Daytona: `N8N_AGENTS_AI_SANDBOX_ENABLED=true`, `N8N_AGENTS_AI_SANDBOX_PROVIDER=daytona`, `DAYTONA_API_URL`, `DAYTONA_API_KEY`. Channels need a public HTTPS `WEBHOOK_URL`. Queue mode unsupported for agents.
+- Execution pruning: `EXECUTIONS_DATA_PRUNE`, `EXECUTIONS_DATA_MAX_AGE` (hours, default 336), `EXECUTIONS_DATA_PRUNE_MAX_COUNT` (default 10000). Timezone: `GENERIC_TIMEZONE`.
+- n8n 3.0 also removes the "Any workflow" caller policy on sub-workflows (deprecated now).
 - Health endpoint: `http://localhost:5678/healthz`.
 - The Assistant is in **Preview**. Generated workflows must be reviewed before production use.
 - The bundled sandbox and SQLite are positioned for local/dev. For production, n8n recommends Daytona for the sandbox and Postgres for the database (see the "Install using Docker Compose" and "Set up n8n Assistant" docs).
@@ -121,3 +126,7 @@ Do not invent environment variable names, compose service names, or image tags. 
 - One-line setup: https://docs.n8n.io/deploy/host-n8n/install-options/one-line-setup
 - Set up n8n Assistant: https://docs.n8n.io/deploy/host-n8n/configure-n8n/set-up-n8n-assistant
 - Docker Compose install (Postgres, production): https://docs.n8n.io/deploy/host-n8n/install-options/install-using-docker-compose
+- Build and manage agents: https://docs.n8n.io/build/build-and-manage-agents
+- Enable agents (self-hosted): https://docs.n8n.io/deploy/host-n8n/configure-n8n/set-up-n8n-assistant#enable-agents
+- Manage execution data: https://docs.n8n.io/deploy/host-n8n/configure-n8n/scaling/manage-execution-data/
+- Release notes: https://docs.n8n.io/release-notes/

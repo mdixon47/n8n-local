@@ -17,7 +17,7 @@
 # Usage: ./n8nctl.sh <command> [options]    (see ./n8nctl.sh help)
 set -euo pipefail
 
-N8NCTL_VERSION="1.2.0"
+N8NCTL_VERSION="1.3.0"
 INSTALLER_URL="https://get.n8n.io"
 RELEASES_URL="https://api.github.com/repos/n8n-io/n8n/releases/latest"
 N8N_PORT=5678
@@ -35,6 +35,25 @@ MODEL_VAR="N8N_INSTANCE_AI_MODEL"
 BRAVE_VAR="INSTANCE_AI_BRAVE_SEARCH_API_KEY"
 DEFAULT_MODEL="anthropic/claude-opus-4-8"   # n8n's own default when MODEL_VAR is unset
 PROVIDERS="anthropic openai openrouter"      # providers n8n documents for the Assistant
+
+MODULES_VAR="N8N_ENABLED_MODULES"
+AGENTS_MIN_VERSION="2.32.3"                  # Agents (Preview) available from this release
+# Module names n8n 2.35.3 accepts in N8N_ENABLED_MODULES
+# (packages/@n8n/backend-common/src/modules/modules.config.ts). An unknown
+# name makes n8n refuse to start, so the wrapper validates against this list.
+# Modules n8n 2.35.3 loads without being listed (module-registry.ts defaultModules).
+# Removing one of these from N8N_ENABLED_MODULES does not turn it off.
+DEFAULT_MODULES="insights external-secrets community-packages data-table oauth-server mcp provisioning breaking-changes source-control dynamic-credentials chat-hub sso-oidc sso-saml log-streaming ldap quick-connect workflow-builder favorites redaction instance-registry otel token-exchange instance-version-history encryption-key-manager oauth-jwe n8n-packages runtime-credentials mcp-registry workflow-reviews instance-ai"
+KNOWN_MODULES="agents agent-evals insights external-secrets community-packages data-table oauth-server mcp provisioning breaking-changes source-control dynamic-credentials chat-hub sso-oidc sso-saml log-streaming ldap quick-connect workflow-builder favorites redaction instance-registry instance-ai mcp-registry otel token-exchange instance-version-history encryption-key-manager oauth-jwe runtime-credentials n8n-packages workflow-reviews"
+
+# Other secrets set-key can store with the same hidden prompt (set-key --var NAME).
+extra_secret_var() {
+  case "$1" in
+    daytona) printf 'DAYTONA_API_KEY\n' ;;                 # agents knowledge base / Daytona sandbox
+    brave)   printf 'INSTANCE_AI_BRAVE_SEARCH_API_KEY\n' ;; # web search; note: no N8N_ prefix
+    *) return 1 ;;
+  esac
+}
 
 # Per-provider key variable n8n falls back to when KEY_VAR is empty
 # (packages/cli/src/modules/instance-ai/instance-ai-settings.service.ts).
@@ -559,19 +578,24 @@ cmd_upgrade() {
 }
 
 cmd_set_key() {
-  local key var="$KEY_VAR" provider="" remove=0 p pv
+  local key var="$KEY_VAR" provider="" extra="" remove=0 p pv
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --provider) [[ $# -ge 2 ]] || die "--provider needs a value"; provider="$2"; shift ;;
       --provider=*) provider="${1#*=}" ;;
+      --var) [[ $# -ge 2 ]] || die "--var needs a value"; extra="$2"; shift ;;
+      --var=*) extra="${1#*=}" ;;
       --remove) remove=1 ;;
       *) die "set-key: unknown option '$1'" ;;
     esac
     shift
   done
   require_install
+  [[ -n "$provider" && -n "$extra" ]] && die "use either --provider or --var, not both"
   if [[ -n "$provider" ]]; then
     var="$(provider_key_var "$provider")" || die "unknown provider '$provider' (one of: $PROVIDERS)"
+  elif [[ -n "$extra" ]]; then
+    var="$(extra_secret_var "$extra")" || die "unknown --var '$extra' (one of: daytona brave)"
   fi
 
   if (( remove )); then
@@ -581,7 +605,7 @@ cmd_set_key() {
     log "set-key  var=$var action=remove"
   else
     if [[ -t 0 ]]; then
-      printf 'API key for %s (input hidden): ' "${provider:-the active provider}"
+      printf 'API key for %s (input hidden): ' "${provider:-${extra:-the active provider}}"
       IFS= read -rs key
       printf '\n'
     else
@@ -610,7 +634,7 @@ cmd_set_key() {
   else
     say "n8n is not running; the change takes effect on './n8nctl.sh start'."
   fi
-  if (( ! remove )); then
+  if (( ! remove )) && [[ -z "$extra" ]]; then
     say "Keys on file:"
     for p in $PROVIDERS; do
       pv="$(provider_key_var "$p")"
@@ -652,8 +676,67 @@ cmd_set_model() {
   fi
 }
 
+module_known() { local m; for m in $KNOWN_MODULES; do [[ "$m" == "$1" ]] && return 0; done; return 1; }
+module_default() { local m; for m in $DEFAULT_MODULES; do [[ "$m" == "$1" ]] && return 0; done; return 1; }
+
+# Current N8N_ENABLED_MODULES as a space-separated list (may be empty).
+modules_list() { env_get "$MODULES_VAR" | tr ',' ' ' | tr -s ' ' | sed 's/^ //; s/ $//'; }
+
+module_listed() { local m; for m in $(modules_list); do [[ "$m" == "$1" ]] && return 0; done; return 1; }
+
+cmd_modules() {
+  local action="" name="" cur new m ver
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --enable)  [[ $# -ge 2 ]] || die "--enable needs a module name"; action=enable; name="$2"; shift ;;
+      --enable=*)  action=enable; name="${1#*=}" ;;
+      --disable) [[ $# -ge 2 ]] || die "--disable needs a module name"; action=disable; name="$2"; shift ;;
+      --disable=*) action=disable; name="${1#*=}" ;;
+      *) die "modules: unknown option '$1' (use --enable NAME or --disable NAME)" ;;
+    esac
+    shift
+  done
+  require_install
+  cur="$(modules_list)"
+
+  if [[ -z "$action" ]]; then
+    say "$MODULES_VAR: ${cur:-(unset; n8n loads its default modules)}"
+    say "Default modules (always on unless listed in N8N_DISABLED_MODULES): $DEFAULT_MODULES"
+    say "Opt-in modules: $(for m in $KNOWN_MODULES; do module_default "$m" || printf '%s ' "$m"; done)"
+    return 0
+  fi
+  module_known "$name" || die "unknown module '$name'. n8n refuses to start on unknown names. Known: $KNOWN_MODULES"
+
+  if [[ "$action" == enable ]]; then
+    module_listed "$name" && { ok "$name is already in $MODULES_VAR"; return 0; }
+    module_default "$name" && warn "$name is a default module; n8n loads it without listing it. Adding it is harmless."
+    if [[ "$name" == agents ]]; then
+      ver="$(env_get N8N_VERSION)"
+      [[ -n "$ver" ]] && version_lt "$ver" "$AGENTS_MIN_VERSION" &&
+        warn "Agents need n8n $AGENTS_MIN_VERSION or newer; installed is $ver. Upgrade first."
+    fi
+    new="${cur:+$cur }$name"
+  else
+    module_listed "$name" || { say "$name is not in $MODULES_VAR; nothing to do"; return 0; }
+    module_default "$name" && warn "$name is a default module; removing it from $MODULES_VAR does NOT turn it off. To disable it, list it in N8N_DISABLED_MODULES in $N8N_DIR/.env."
+    new=""
+    for m in $cur; do [[ "$m" == "$name" ]] || new="${new:+$new }$m"; done
+  fi
+
+  if [[ -z "$new" ]]; then env_unset "$MODULES_VAR"; else env_set "$MODULES_VAR" "$(printf '%s' "$new" | tr ' ' ',')"; fi
+  ok "$MODULES_VAR: ${new:-(unset)}"
+  log "modules  action=$action module=$name value=${new:-unset}"
+  if n8n_running; then
+    say "Applying to the running stack ..."
+    compose up -d >/dev/null
+    ok "Applied."
+  else
+    say "n8n is not running; the change takes effect on './n8nctl.sh start'."
+  fi
+}
+
 cmd_status() {
-  local ver sandbox mode vol last keys p
+  local ver sandbox mode vol last keys p mods
   say "${C_BOLD}n8nctl $N8NCTL_VERSION${C_RESET}  base: $N8N_BASE_DIR"
   if ! is_installed; then
     say "Install:    none (run './n8nctl.sh install --version X.Y.Z')"
@@ -674,6 +757,18 @@ cmd_status() {
     say "Assistant:  OFF, no model key (run './n8nctl.sh set-key --provider <name>')"
   fi
   if env_is_set "$BRAVE_VAR"; then say "Web search: Brave ($BRAVE_VAR)"; else say "Web search: bundled SearXNG"; fi
+  mods="$(modules_list)"
+  say "Modules:    ${mods:-(unset; n8n defaults)}"
+  if module_listed agents; then
+    if [[ -n "$ver" ]] && version_lt "$ver" "$AGENTS_MIN_VERSION"; then
+      warn "agents is enabled but needs n8n $AGENTS_MIN_VERSION or newer (installed $ver)"
+    else
+      say "Agents:     enabled (Preview)"
+    fi
+  else
+    say "Agents:     not in $MODULES_VAR (enable with './n8nctl.sh modules --enable agents')"
+  fi
+  env_is_set DAYTONA_API_KEY && say "Daytona:    key on file (DAYTONA_API_KEY)"
   [[ -f "$N8N_DIR/compose.override.yml" ]] && say "Override:   compose.override.yml present"
   gitignore_ok || warn ".gitignore is missing n8n/, n8n-backups/ or n8nctl.log"
 
@@ -946,7 +1041,10 @@ Commands
                                  P = anthropic | openai | openrouter. Without --provider the
                                  generic key is set, which overrides per-provider keys.
                                  --remove deletes the chosen key instead
+  set-key --var daytona|brave    Same hidden prompt for DAYTONA_API_KEY / the Brave search key
   set-model <provider>/<model>   Switch the Assistant model; uses that provider's key
+  modules [--enable M|--disable M]
+                                 Show or edit N8N_ENABLED_MODULES (e.g. --enable agents)
   status                         Versions, key present?, containers, health, last backup
   start | stop | logs [service]  Run the stack / stop it (data kept) / follow logs
   backup                         Snapshot data volume + .env + compose files (brief n8n pause)
@@ -992,6 +1090,7 @@ main() {
     install)   cmd_install "$@" ;;
     set-key)   cmd_set_key "$@" ;;
     set-model) cmd_set_model "$@" ;;
+    modules)   cmd_modules "$@" ;;
     status)    cmd_status "$@" ;;
     start)     cmd_start "$@" ;;
     stop)      cmd_stop "$@" ;;

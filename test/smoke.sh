@@ -68,8 +68,35 @@ check       "set-model replaces, no duplicate"       bash -c "\"$CTL\" set-model
 check_fails "set-model rejects bare name"            "$CTL" set-model claude
 check_fails "set-model rejects unknown provider"     "$CTL" set-model google/gemini
 check_fails "set-model rejects empty model"          "$CTL" set-model anthropic/
+check       "set-key --var daytona"                  bash -c "printf 'dtn-TEST\n' | \"$CTL\" set-key --var daytona"
+check       "DAYTONA_API_KEY written"                grep -qx 'DAYTONA_API_KEY=dtn-TEST' "$ENV"
+check       "set-key --var brave"                    bash -c "printf 'BSA-TEST\n' | \"$CTL\" set-key --var brave"
+check       "brave key written (no N8N_ prefix)"     grep -qx 'INSTANCE_AI_BRAVE_SEARCH_API_KEY=BSA-TEST' "$ENV"
+check_fails "set-key rejects unknown --var"          bash -c "printf 'x\n' | \"$CTL\" set-key --var foo"
+check_fails "set-key rejects --var with --provider"  bash -c "printf 'x\n' | \"$CTL\" set-key --var brave --provider openai"
+check       "set-key --var daytona --remove"         "$CTL" set-key --var daytona --remove
+check       "DAYTONA_API_KEY gone"                   bash -c "! grep -q '^DAYTONA_API_KEY=' '$ENV'"
+check       "status shows Brave"                     bash -c "\"$CTL\" status | grep -q 'Web search: Brave'"
 check       ".env still 600"                         test "$(perm "$ENV")" = "-rw-------"
-check       "no key value in log"                    bash -c "! grep -qE 'sk-(test|or|ant)' '$N8N_BASE_DIR/n8nctl.log'"
+check       "no key value in log"                    bash -c "! grep -qE 'sk-(test|or|ant)|dtn-|BSA-' '$N8N_BASE_DIR/n8nctl.log'"
+
+# --- modules ------------------------------------------------------------------
+check       "modules shows unset"                    bash -c "\"$CTL\" modules | grep -q 'N8N_ENABLED_MODULES: (unset'"
+check       "status: agents not enabled"             bash -c "\"$CTL\" status | grep -q 'Agents:     not in N8N_ENABLED_MODULES'"
+check       "modules --enable agents"                "$CTL" modules --enable agents
+check       "N8N_ENABLED_MODULES=agents"             grep -qx 'N8N_ENABLED_MODULES=agents' "$ENV"
+check       "enable again is a no-op"                bash -c "\"$CTL\" modules --enable agents && grep -qx 'N8N_ENABLED_MODULES=agents' '$ENV'"
+check       "modules --enable instance-ai appends"   bash -c "\"$CTL\" modules --enable instance-ai && grep -qx 'N8N_ENABLED_MODULES=agents,instance-ai' '$ENV'"
+check       "status: agents enabled"                 bash -c "\"$CTL\" status | grep -q 'Agents:     enabled'"
+check       "status: Modules line"                   bash -c "\"$CTL\" status | grep -q 'Modules:    agents instance-ai'"
+check_fails "modules rejects unknown name"           "$CTL" modules --enable bogus-module
+check       "enable default module warns"           bash -c "\"$CTL\" modules --enable insights 2>&1 | grep -q 'default module'"
+check       "disable default module warns, edits"    bash -c "\"$CTL\" modules --disable instance-ai 2>&1 | grep -q 'does NOT turn it off' && grep -qx 'N8N_ENABLED_MODULES=agents,insights' '$ENV'"
+check       "disable insights"                       bash -c "\"$CTL\" modules --disable insights && grep -qx 'N8N_ENABLED_MODULES=agents' '$ENV'"
+check       "modules lists opt-in and default"       bash -c "\"$CTL\" modules | grep -q 'Opt-in modules: agents' && \"$CTL\" modules | grep -q 'Default modules'"
+check       "disable agents removes the line"        bash -c "\"$CTL\" modules --disable agents && ! grep -q '^N8N_ENABLED_MODULES=' '$ENV'"
+check       "disable absent is a no-op"              "$CTL" modules --disable agents
+check       "modules logged, no values leaked"       bash -c "grep -q 'modules  action=enable module=agents' '$N8N_BASE_DIR/n8nctl.log'"
 
 # --- backup / verify / restore -------------------------------------------------
 echo "before" > "$VOL/marker"
