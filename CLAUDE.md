@@ -37,7 +37,8 @@ Always go through the wrapper rather than raw `curl | sh`:
 | --- | --- |
 | Check prerequisites | `./n8nctl.sh preflight` |
 | Fresh install (pinned) | `./n8nctl.sh install --version 2.35.3` |
-| Set the AI Assistant key | `./n8nctl.sh set-key` (hidden prompt, or pipe the key on stdin) |
+| Set the AI Assistant key | `./n8nctl.sh set-key [--provider anthropic\|openai\|openrouter]` (hidden prompt, or pipe the key on stdin); `--remove` deletes it |
+| Switch the Assistant model | `./n8nctl.sh set-model <provider>/<model>` |
 | Health and config check | `./n8nctl.sh status` |
 | Start / stop / logs | `./n8nctl.sh start` · `stop` · `logs [service]` |
 | Snapshot | `./n8nctl.sh backup` |
@@ -66,7 +67,7 @@ Upstream installer flags: `--version [X]`, `--no-start`, `--upgrade`, `--help`. 
 - Requires Docker with the `docker compose` v2 plugin. The legacy `docker-compose` binary does not work. Podman/Colima need the docker CLI + compose plugin with `DOCKER_HOST` pointed at their socket.
 - Windows: run under WSL with Docker Desktop's WSL2 integration. Git Bash is unverified upstream.
 - The stack includes n8n, a bundled code sandbox (`n8n-sandbox`), a bundled private web search (SearXNG), and a task-runners sidecar. Only port `5678` is published; the rest stay on the internal network.
-- The Assistant stays off until a model key exists. Key variable: `N8N_INSTANCE_AI_MODEL_API_KEY` in `./n8n/.env`. It can also be set in the UI under the instance AI settings, which is where provider/model selection lives.
+- The Assistant stays off until a model key exists. Generic key variable: `N8N_INSTANCE_AI_MODEL_API_KEY` in `./n8n/.env`; when it is empty n8n falls back to the active provider's own variable: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`. The generic key overrides all of them. The model is `N8N_INSTANCE_AI_MODEL` in `provider/model` form (default `anthropic/claude-opus-4-8`; providers: anthropic, openai, openrouter). One model is active at a time; there is no automatic failover. Keys can also be set in the UI under the instance AI settings.
 - Optional: `INSTANCE_AI_BRAVE_SEARCH_API_KEY` in `.env` switches web search from the bundled tool to Brave.
 - Health endpoint: `http://localhost:5678/healthz`.
 - The Assistant is in **Preview**. Generated workflows must be reviewed before production use.

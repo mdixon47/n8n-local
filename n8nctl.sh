@@ -17,7 +17,7 @@
 # Usage: ./n8nctl.sh <command> [options]    (see ./n8nctl.sh help)
 set -euo pipefail
 
-N8NCTL_VERSION="1.1.0"
+N8NCTL_VERSION="1.2.0"
 INSTALLER_URL="https://get.n8n.io"
 RELEASES_URL="https://api.github.com/repos/n8n-io/n8n/releases/latest"
 N8N_PORT=5678
@@ -31,7 +31,21 @@ GITIGNORE_FILE="$N8N_BASE_DIR/.gitignore"
 
 # The variable n8n reads the Assistant's model key from (see CLAUDE.md).
 KEY_VAR="N8N_INSTANCE_AI_MODEL_API_KEY"
+MODEL_VAR="N8N_INSTANCE_AI_MODEL"
 BRAVE_VAR="INSTANCE_AI_BRAVE_SEARCH_API_KEY"
+DEFAULT_MODEL="anthropic/claude-opus-4-8"   # n8n's own default when MODEL_VAR is unset
+PROVIDERS="anthropic openai openrouter"      # providers n8n documents for the Assistant
+
+# Per-provider key variable n8n falls back to when KEY_VAR is empty
+# (packages/cli/src/modules/instance-ai/instance-ai-settings.service.ts).
+provider_key_var() {
+  case "$1" in
+    anthropic)  printf 'ANTHROPIC_API_KEY\n' ;;
+    openai)     printf 'OPENAI_API_KEY\n' ;;
+    openrouter) printf 'OPENROUTER_API_KEY\n' ;;
+    *) return 1 ;;
+  esac
+}
 
 ASSUME_YES=0
 TMP_DIR=""
@@ -213,6 +227,14 @@ env_set() {
       END { if (!done) print var "=" v }
     ' "$N8N_DIR/.env" >"$tmp"
   )
+  mv "$tmp" "$N8N_DIR/.env"
+  chmod 600 "$N8N_DIR/.env"
+}
+
+# Remove NAME=... lines entirely.
+env_unset() {
+  local tmp="$N8N_DIR/.env.tmp.$$"
+  ( umask 077; grep -v "^$1=" "$N8N_DIR/.env" >"$tmp" || true )
   mv "$tmp" "$N8N_DIR/.env"
   chmod 600 "$N8N_DIR/.env"
 }
@@ -537,36 +559,101 @@ cmd_upgrade() {
 }
 
 cmd_set_key() {
-  local key
+  local key var="$KEY_VAR" provider="" remove=0 p pv
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --provider) [[ $# -ge 2 ]] || die "--provider needs a value"; provider="$2"; shift ;;
+      --provider=*) provider="${1#*=}" ;;
+      --remove) remove=1 ;;
+      *) die "set-key: unknown option '$1'" ;;
+    esac
+    shift
+  done
   require_install
-  if [[ -t 0 ]]; then
-    printf 'Model API key for the n8n Assistant (input hidden): '
-    IFS= read -rs key
-    printf '\n'
-  else
-    IFS= read -r key || true
+  if [[ -n "$provider" ]]; then
+    var="$(provider_key_var "$provider")" || die "unknown provider '$provider' (one of: $PROVIDERS)"
   fi
-  key="${key%$'\r'}"
-  key="${key#"${key%%[![:space:]]*}"}"
-  key="${key%"${key##*[![:space:]]}"}"
-  [[ -n "$key" ]] || die "no key given"
-  [[ "$key" =~ [[:space:]] ]] && die "the key contains whitespace; paste only the key itself"
 
-  env_set "$KEY_VAR" "$key"
-  ok "Saved $KEY_VAR to $N8N_DIR/.env (mode 600)"
-  log "set-key  var=$KEY_VAR action=set"
+  if (( remove )); then
+    env_is_set "$var" || { say "$var is not set; nothing to do"; return 0; }
+    env_unset "$var"
+    ok "Removed $var from $N8N_DIR/.env"
+    log "set-key  var=$var action=remove"
+  else
+    if [[ -t 0 ]]; then
+      printf 'API key for %s (input hidden): ' "${provider:-the active provider}"
+      IFS= read -rs key
+      printf '\n'
+    else
+      IFS= read -r key || true
+    fi
+    key="${key%$'\r'}"
+    key="${key#"${key%%[![:space:]]*}"}"
+    key="${key%"${key##*[![:space:]]}"}"
+    [[ -n "$key" ]] || die "no key given"
+    [[ "$key" =~ [[:space:]] ]] && die "the key contains whitespace; paste only the key itself"
+
+    env_set "$var" "$key"
+    ok "Saved $var to $N8N_DIR/.env (mode 600)"
+    log "set-key  var=$var action=set"
+
+    if [[ -n "$provider" ]] && env_is_set "$KEY_VAR"; then
+      warn "$KEY_VAR is also set and takes precedence for EVERY provider."
+      warn "Run './n8nctl.sh set-key --remove' so per-provider keys apply when you switch models."
+    fi
+  fi
 
   if n8n_running; then
     say "Applying to the running stack ..."
     compose up -d >/dev/null
-    ok "Applied. Pick the provider and model under the instance AI settings in the UI."
+    ok "Applied."
   else
-    say "n8n is not running; the key takes effect on './n8nctl.sh start'."
+    say "n8n is not running; the change takes effect on './n8nctl.sh start'."
+  fi
+  if (( ! remove )); then
+    say "Keys on file:"
+    for p in $PROVIDERS; do
+      pv="$(provider_key_var "$p")"
+      env_is_set "$pv" && say "  $p ($pv)"
+    done
+    env_is_set "$KEY_VAR" && say "  generic ($KEY_VAR, overrides the above)"
+    say "Active model: $(env_get "$MODEL_VAR" | grep . || echo "$DEFAULT_MODEL (n8n default)")"
+    say "Switch with:  ./n8nctl.sh set-model <provider>/<model>"
+  fi
+  return 0
+}
+
+cmd_set_model() {
+  local model="" provider pv
+  [[ $# -eq 1 ]] || die "usage: set-model <provider>/<model>   e.g. anthropic/claude-opus-4-8, openai/gpt-5.5, openrouter/anthropic/claude-opus-4-8"
+  model="$1"
+  require_install
+  [[ "$model" == */* ]] || die "model must be in provider/model form (one of: $PROVIDERS)"
+  provider="${model%%/*}"
+  pv="$(provider_key_var "$provider")" || die "unknown provider '$provider' (one of: $PROVIDERS)"
+  [[ -n "${model#*/}" ]] || die "missing model name after '$provider/'"
+
+  if env_is_set "$KEY_VAR"; then
+    warn "$KEY_VAR is set; it will be used for $provider regardless of $pv."
+  elif ! env_is_set "$pv"; then
+    warn "no key on file for $provider ($pv). Add one with './n8nctl.sh set-key --provider $provider',"
+    warn "unless a provider connection is configured in the n8n UI."
+  fi
+
+  env_set "$MODEL_VAR" "$model"
+  ok "Set $MODEL_VAR=$model"
+  log "set-model  model=$model"
+  if n8n_running; then
+    say "Applying to the running stack ..."
+    compose up -d >/dev/null
+    ok "Applied. The Assistant now uses $model."
+  else
+    say "n8n is not running; the change takes effect on './n8nctl.sh start'."
   fi
 }
 
 cmd_status() {
-  local ver sandbox mode vol last
+  local ver sandbox mode vol last keys p
   say "${C_BOLD}n8nctl $N8NCTL_VERSION${C_RESET}  base: $N8N_BASE_DIR"
   if ! is_installed; then
     say "Install:    none (run './n8nctl.sh install --version X.Y.Z')"
@@ -577,10 +664,14 @@ cmd_status() {
   say "n8n:        ${ver:-unset}    sandbox service: ${sandbox:-unset}"
   mode="$(file_mode "$N8N_DIR/.env")"
   if [[ "$mode" == "600" ]]; then say ".env:       mode 600"; else warn ".env mode is $mode, expected 600 (chmod 600 n8n/.env)"; fi
-  if env_is_set "$KEY_VAR"; then
-    say "Assistant:  model key set ($KEY_VAR)"
+  say "Model:      $(env_get "$MODEL_VAR" | grep . || echo "$DEFAULT_MODEL (n8n default)")"
+  keys=""
+  for p in $PROVIDERS; do env_is_set "$(provider_key_var "$p")" && keys="$keys $p"; done
+  env_is_set "$KEY_VAR" && keys="$keys generic"
+  if [[ -n "$keys" ]]; then
+    say "Assistant:  keys on file:$keys"
   else
-    say "Assistant:  OFF, no model key (run './n8nctl.sh set-key')"
+    say "Assistant:  OFF, no model key (run './n8nctl.sh set-key --provider <name>')"
   fi
   if env_is_set "$BRAVE_VAR"; then say "Web search: Brave ($BRAVE_VAR)"; else say "Web search: bundled SearXNG"; fi
   [[ -f "$N8N_DIR/compose.override.yml" ]] && say "Override:   compose.override.yml present"
@@ -851,7 +942,11 @@ Usage: ./n8nctl.sh [-y|--yes] <command> [options]
 Commands
   preflight                      Check Docker, compose v2, curl, port $N8N_PORT, .gitignore
   install --version X.Y.Z        Fresh install, pinned. Add --no-start to only write config
-  set-key                        Save the Assistant model key (hidden prompt, or pipe on stdin)
+  set-key [--provider P]         Save an Assistant key (hidden prompt, or pipe on stdin).
+                                 P = anthropic | openai | openrouter. Without --provider the
+                                 generic key is set, which overrides per-provider keys.
+                                 --remove deletes the chosen key instead
+  set-model <provider>/<model>   Switch the Assistant model; uses that provider's key
   status                         Versions, key present?, containers, health, last backup
   start | stop | logs [service]  Run the stack / stop it (data kept) / follow logs
   backup                         Snapshot data volume + .env + compose files (brief n8n pause)
@@ -896,6 +991,7 @@ main() {
     preflight) cmd_preflight "$@" ;;
     install)   cmd_install "$@" ;;
     set-key)   cmd_set_key "$@" ;;
+    set-model) cmd_set_model "$@" ;;
     status)    cmd_status "$@" ;;
     start)     cmd_start "$@" ;;
     stop)      cmd_stop "$@" ;;

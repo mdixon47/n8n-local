@@ -50,6 +50,28 @@ provider and model under the instance AI settings in the UI.
 `upgrade` and `uninstall` accept `--skip-backup`; `restore` accepts
 `--no-safety-backup`. `install` and `upgrade` accept `--no-start`.
 
+## Two providers: a partner key and a fallback
+
+The Assistant uses one model at a time, but you can keep a key on file for
+each provider and switch between them in one command. n8n reads the generic
+`N8N_INSTANCE_AI_MODEL_API_KEY` if set, otherwise the active provider's own
+variable (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`). n8n has
+no automatic failover, so the fallback is a manual switch:
+
+```bash
+./n8nctl.sh set-key --provider anthropic     # primary
+./n8nctl.sh set-key --provider openrouter    # partner / fallback
+./n8nctl.sh set-key --remove                 # clear the generic key so per-provider keys apply
+./n8nctl.sh status                           # shows "keys on file" and the active model
+
+./n8nctl.sh set-model openrouter/anthropic/claude-opus-4-8   # switch when the primary is down
+./n8nctl.sh set-model anthropic/claude-opus-4-8              # and back
+```
+
+OpenRouter alone already routes each model across several upstream providers,
+so an OpenRouter key is the simplest single-key redundancy. The model name
+must be one the provider offers; check the provider's model list.
+
 ## Local-only binding and other customizations
 
 `n8n/compose.override.yml` holds local changes to the stack. The upstream

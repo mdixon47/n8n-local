@@ -48,8 +48,28 @@ check       "set-key replaces"                       bash -c "printf 'sk-test-TW
 check       ".env still 600 after set-key"           test "$(perm "$ENV")" = "-rw-------"
 check_fails "set-key rejects empty"                  bash -c "printf '\n' | \"$CTL\" set-key"
 check_fails "set-key rejects whitespace"             bash -c "printf 'a b\n' | \"$CTL\" set-key"
-check       "status shows key set"                   bash -c "\"$CTL\" status | grep -q 'model key set'"
-check       "key never in log"                       bash -c "! grep -q 'sk-test' '$N8N_BASE_DIR/n8nctl.log'"
+check       "status shows generic key"               bash -c "\"$CTL\" status | grep -q 'keys on file: generic'"
+
+# --- per-provider keys and model switching ---------------------------------
+check       "set-key --provider openrouter"          bash -c "printf 'sk-or-TEST\n' | \"$CTL\" set-key --provider openrouter"
+check       "provider key written"                   grep -qx 'OPENROUTER_API_KEY=sk-or-TEST' "$ENV"
+check       "warns generic overrides"                bash -c "printf 'sk-ant-TEST\n' | \"$CTL\" set-key --provider anthropic 2>&1 | grep -q 'takes precedence'"
+check_fails "set-key rejects unknown provider"       bash -c "printf 'x\n' | \"$CTL\" set-key --provider foo"
+check       "set-key --remove generic"               "$CTL" set-key --remove
+check       "generic line gone"                      bash -c "! grep -q '^N8N_INSTANCE_AI_MODEL_API_KEY=' '$ENV'"
+check       "provider keys survive remove"           bash -c "grep -qx 'ANTHROPIC_API_KEY=sk-ant-TEST' '$ENV' && grep -qx 'OPENROUTER_API_KEY=sk-or-TEST' '$ENV'"
+check       "remove when absent is a no-op"          "$CTL" set-key --remove
+check       "status lists provider keys"             bash -c "\"$CTL\" status | grep -q 'keys on file: anthropic openrouter'"
+check       "status shows default model"             bash -c "\"$CTL\" status | grep -q 'Model:      anthropic/claude-opus-4-8 (n8n default)'"
+check       "set-model openrouter"                   "$CTL" set-model openrouter/anthropic/claude-opus-4-8
+check       "model written"                          grep -qx 'N8N_INSTANCE_AI_MODEL=openrouter/anthropic/claude-opus-4-8' "$ENV"
+check       "set-model without key warns but works"  bash -c "\"$CTL\" set-model openai/gpt-5.5 2>&1 | grep -q 'no key on file for openai'"
+check       "set-model replaces, no duplicate"       bash -c "\"$CTL\" set-model anthropic/claude-opus-4-8 && [ \$(grep -c '^N8N_INSTANCE_AI_MODEL=' '$ENV') -eq 1 ]"
+check_fails "set-model rejects bare name"            "$CTL" set-model claude
+check_fails "set-model rejects unknown provider"     "$CTL" set-model google/gemini
+check_fails "set-model rejects empty model"          "$CTL" set-model anthropic/
+check       ".env still 600"                         test "$(perm "$ENV")" = "-rw-------"
+check       "no key value in log"                    bash -c "! grep -qE 'sk-(test|or|ant)' '$N8N_BASE_DIR/n8nctl.log'"
 
 # --- backup / verify / restore -------------------------------------------------
 echo "before" > "$VOL/marker"
