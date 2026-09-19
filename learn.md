@@ -279,10 +279,12 @@ wrong key; the `--remove` step fixes it.
 When the primary is down:
 
 ```bash
-./n8nctl.sh set-model openrouter/anthropic/claude-opus-4-8
+./n8nctl.sh set-model openrouter/anthropic/claude-opus-4.8
 ```
 
-And back with `set-model anthropic/claude-opus-4-8`. Agents keep their own
+Note the dot: OpenRouter's id for that model is `claude-opus-4.8`, while
+Anthropic's own API calls it `claude-opus-4-8`. Each provider's spelling
+applies. And back with `set-model anthropic/claude-opus-4-8`. Agents keep their own
 per-agent credential and are not affected; to move an agent, edit its model
 in the Agent Builder and publish again.
 

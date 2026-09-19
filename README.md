@@ -205,13 +205,15 @@ command when the primary is down:
 ./n8nctl.sh set-key --remove                 # clear the generic key so per-provider keys apply
 ./n8nctl.sh status                           # "keys on file: anthropic openrouter"
 
-./n8nctl.sh set-model openrouter/anthropic/claude-opus-4-8   # switch when the primary is down
+./n8nctl.sh set-model openrouter/anthropic/claude-opus-4.8   # switch when the primary is down
 ./n8nctl.sh set-model anthropic/claude-opus-4-8              # and back
 ```
 
 If the generic key is still set, `set-key --provider` warns you: the generic
 key wins for every provider, so a model switch would send the wrong key.
-The model name must be one the provider offers; check its model list.
+The model name must be one the provider offers, spelled the provider's way:
+Anthropic writes `claude-opus-4-8`, OpenRouter writes `anthropic/claude-opus-4.8`
+with a dot. Check with `curl -s https://openrouter.ai/api/v1/models | grep -o '"id":"anthropic/[^"]*'`.
 
 Agents are unaffected by `set-model`. An agent's model is fixed per agent;
 failing an agent over to another provider means editing the agent in the
@@ -400,6 +402,15 @@ Stop it, or install with `--no-start`, remap the port in
 **Health check fails right after `backup` or `start`.** n8n takes a few
 seconds to boot after a restart. Both commands now wait for the health
 endpoint; if `status` still says "Not answering", run `./n8nctl.sh logs n8n`.
+
+**Assistant says `API key is invalid` or `No output generated. Check the
+stream for errors`.** The second is the first wrapped one layer up. Look at
+`./n8nctl.sh logs n8n` for the provider URL and status: a 401 from
+`api.anthropic.com` while `status` shows `keys on file: ... generic` means
+the generic key is being sent to a provider it does not belong to. Fix with
+`set-key --remove` and `set-model <provider>/<model>` for the provider whose
+key is valid. A 404 or "model not found" from OpenRouter usually means the id
+is spelled Anthropic's way; OpenRouter uses dots (`claude-opus-4.8`).
 
 **Assistant sidebar is missing or silent.** `status` should list at least one
 key under "keys on file" and a model whose provider has a key. If the generic
