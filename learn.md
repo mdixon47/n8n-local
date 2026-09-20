@@ -260,6 +260,29 @@ Things that need more than this local install: episodic memory (an OpenAI
 credential), a knowledge base (a Daytona account), and channels such as Slack
 (a public URL, see section 12). The README's Agents section has the details.
 
+### Connecting third-party credentials
+
+The Monday workflow needs Google Sheets, Google Gemini and LinkedIn. Each
+is a credential in n8n, created from Overview, Credentials, Create. Three
+rules save most of the trouble:
+
+- An OAuth2 credential (Google Sheets, LinkedIn, Gmail) is not connected
+  until you click **Connect my account** and allow in the popup. Saving the
+  Client ID and Secret alone stores nothing usable; the node then reports
+  "Error fetching options".
+- Never open the callback address
+  `http://localhost:5678/rest/oauth2-credential/callback` yourself. Paste
+  it into the provider's app settings as the redirect URL, and let the
+  login round trip land on it.
+- API-key credentials (Gemini, OpenAI) keep their default Host. Paste only
+  the key.
+
+Provider specifics: LinkedIn needs Organization Support and Legacy off
+unless the app has Community Management approval, and its tokens expire
+after 60 days. Google needs the Sheets and Drive APIs enabled on the Cloud
+project that owns the OAuth client. The README's troubleshooting section
+lists the exact error texts and fixes.
+
 ## 9. How-to: a fallback provider
 
 n8n runs one Assistant model at a time and does not fail over by itself. The

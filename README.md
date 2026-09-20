@@ -438,6 +438,42 @@ bundled sandbox and the loopback binding cannot provide either. See
 `./n8nctl.sh modules --disable <name>` removes it, or use `modules` to see the
 accepted names. The wrapper only writes names it knows.
 
+**Third-party credentials: LinkedIn, Google, OpenAI.** These live in n8n's
+credential store, not in `.env`, and every failure below shows its real cause
+in `./n8nctl.sh logs n8n`.
+
+- *LinkedIn: `invalid_scope_error`, or a "Bummer, something went wrong"
+  page.* n8n asked for a scope the app lacks. In the credential, turn
+  Organization Support off (it adds `w_organization_social`, which needs
+  LinkedIn's Community Management review) and Legacy off (it asks for
+  retired scopes). The app itself needs the Share on LinkedIn and Sign In
+  with LinkedIn using OpenID Connect products, and the redirect URL
+  `http://localhost:5678/rest/oauth2-credential/callback` on its Auth tab.
+- *LinkedIn node: "Error fetching options".* The credential has no token
+  yet; the log says `Unable to sign without access token`. Open the
+  credential and click **Connect my account** (n8n's button name), allow in
+  the popup, then select the credential in the node. Standard LinkedIn
+  tokens last 60 days with no refresh; reconnect before they expire.
+- *`Insufficient parameters for OAuth2 callback`.* The callback address was
+  opened by hand or from LinkedIn's OAuth tools. It only works as the
+  landing point of a login started by Connect my account in n8n.
+- *Google: `403 ... API has not been used in project N ... or it is
+  disabled`.* Enable that API on that project in the Google Cloud console;
+  the Google Sheets node needs both the Sheets API and the Drive API. A
+  consent screen still in Testing mode expires refresh tokens after seven
+  days; publish it for personal use.
+- *Google Gemini credential "Couldn't connect".* The Host field must be
+  `https://generativelanguage.googleapis.com`, its default. The OAuth
+  callback URL does not belong there; it is for OAuth2 credentials such as
+  Google Sheets.
+- *OpenAI 401 "Incorrect API key provided" in a workflow.* A credential
+  holds a bad key. Open Overview, Credentials, the OpenAI account, and
+  replace it. `set-key` does not touch workflow credentials.
+- *OpenRouter 402 "exceed your available credits" or "requires more
+  credits, or fewer max_tokens".* The Assistant reserves 65,536 output
+  tokens per call at the model's price; the account balance is too small
+  for that. Top up at openrouter.ai, or `set-model` to a cheaper model.
+
 **Which volume holds my data?** `status` prints it. If several `*n8n-data`
 volumes exist, set `N8N_VOLUME` to the right one.
 
