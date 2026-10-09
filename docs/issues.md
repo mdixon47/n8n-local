@@ -17,12 +17,11 @@ When an item is done, delete it here and mention it in the commit message.
 | 3 | Two workflows deleted, one of them an active error handler | Now (decide) | 15 min |
 | 4 | Wrapper's module list is stale (2.35.3) | Soon | 15 min |
 | 5 | Version numbers in README and CLAUDE.md are stale | Soon | 10 min |
-| 6 | Today's changes are not committed | Soon | 5 min |
-| 7 | Scheduled workflows will skip missed runs (2.36 change) | Before activating them | 5 min |
-| 8 | No repeatable template import command | Later | 1-2 h |
-| 9 | Templates not imported, or imported with missing nodes | Optional | varies |
-| 10 | Housekeeping: duplicates, old exports, backup pruning | Later | 10 min |
-| 11 | Accepted risks to re-check | Review | none |
+| 6 | Scheduled workflows will skip missed runs (2.36 change) | Before activating them | 5 min |
+| 7 | No repeatable template import command | Later | 1-2 h |
+| 8 | Templates not imported, or imported with missing nodes | Optional | varies |
+| 9 | Housekeeping: duplicates, old exports, backup pruning | Later | 10 min |
+| 10 | Accepted risks to re-check | Review | none |
 
 ## 1. Gmail credential expired
 
@@ -178,26 +177,7 @@ wanted).
 **Done when:** `grep -n '2\.35\|2\.39' README.md CLAUDE.md` shows only
 historical log examples.
 
-## 6. Today's changes are not committed
-
-**Status:** open.
-
-| Path | Change |
-| --- | --- |
-| `docs/learn.md` | moved from `learn.md` and updated |
-| `docs/issues.md` | new: this file |
-| `templates-api/server.py`, `build.py` | new: the Templates gallery |
-| `.gitignore` | ignores `templates-api/data/` and build staging |
-| `README.md`, `CLAUDE.md` | gallery section, layout, links |
-
-`n8n/compose.override.yml` and `n8n/.env` changed too (LAN access, gallery
-service, `N8N_SECURE_COOKIE`, `N8N_TEMPLATES_HOST`) but live under the
-gitignored `n8n/`. They travel in backups, not in git.
-
-**Fix:** review `git diff`, then commit. Check that `templates-api/data/`
-does not appear in `git status`.
-
-## 7. Scheduled workflows will skip missed runs
+## 6. Scheduled workflows will skip missed runs
 
 **Status:** no action needed while they are off.
 
@@ -213,7 +193,7 @@ catch up on missed runs if they must not be skipped. To keep the Mac awake
 for good: System Settings, Energy, "Prevent automatic sleeping when the
 display is off".
 
-## 8. No repeatable template import
+## 7. No repeatable template import
 
 **Status:** open, improvement.
 
@@ -228,7 +208,7 @@ line, and report counts. Add smoke tests with a fixture template. Consider a
 `templates` subcommand that runs `templates-api/build.py`, and a
 `Templates:` line in `status` showing the gallery's health.
 
-## 9. Templates left out or incomplete
+## 8. Templates left out or incomplete
 
 **Status:** optional; import by hand if wanted (learn.md section 19).
 
@@ -262,7 +242,7 @@ purpose changes:
 - `OpenAI_and_LLMs/AI-Driven Lead Management and Inquiry Automation with ERPNext & n8n.json`
 - `OpenAI_and_LLMs/lemlist __ GPT-3_ Supercharge your sales workflows.json`
 
-## 10. Housekeeping
+## 9. Housekeeping
 
 - **Duplicate workflows:** three called *Auto-label incoming Gmail messages
   with AI*; one active, two archived. Delete the archived two once you are
@@ -270,14 +250,17 @@ purpose changes:
 - **Exports pile up:** `exports/` holds full copies of every workflow, and
   each `templates-api/build.py` run adds one. Delete old ones when no longer
   needed; they are gitignored but readable on disk.
-- **Snapshots:** four, 128 MB in total. After item 3, prune with
+- **Snapshots:** five, 169 MB in total. After item 3, prune with
   `./n8nctl.sh backups --prune 3` or let the fixed nightly job do it.
+- **Config lives outside git:** `n8n/compose.override.yml` and `n8n/.env`
+  (LAN access, the gallery service, `N8N_SECURE_COOKIE`, `N8N_TEMPLATES_HOST`)
+  are under the gitignored `n8n/`. Snapshots carry them; git does not.
 - **Gallery data is not backed up:** `templates-api/data/` is generated.
   After any `restore`, run `python3 -I templates-api/build.py`.
 - **Newer n8n:** 2.43.x images exist (2.43.3 on 2026-10-09). Read the 2.43
   release notes before moving; follow learn.md section 11.
 
-## 11. Accepted risks to re-check
+## 10. Accepted risks to re-check
 
 Chosen deliberately on 2026-10-09. Re-check if the network or the use
 changes.
