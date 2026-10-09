@@ -48,6 +48,7 @@ currently needs attention on this install is in [docs/issues.md](docs/issues.md)
 - [Developing the wrapper](#developing-the-wrapper)
 - [Learning guide](docs/learn.md)
 - [Open issues](docs/issues.md)
+- [Backup plan](docs/backup-plan.md)
 
 ## Requirements
 
@@ -399,18 +400,24 @@ install does not use.
 ## Nightly backups (macOS launchd)
 
 [launchd/com.n8nctl.backup.plist](launchd/com.n8nctl.backup.plist) runs
-`backup` every night at 03:30 and then prunes to the newest 14 snapshots.
-Edit the paths inside if the project moves, then:
+`backup` every night at 23:00 and then prunes to the newest 14 snapshots.
+The full plan, with checks and recovery steps, is
+[docs/backup-plan.md](docs/backup-plan.md). Edit the paths inside the plist
+if the project or your home folder moves, then:
 
 ```bash
 cp launchd/com.n8nctl.backup.plist ~/Library/LaunchAgents/
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.n8nctl.backup.plist
 launchctl kickstart -k gui/$(id -u)/com.n8nctl.backup     # run it once now
-launchctl print gui/$(id -u)/com.n8nctl.backup | grep state   # "not running" between runs is normal
+launchctl print gui/$(id -u)/com.n8nctl.backup | grep -E 'state|last exit code'   # 0 = success
 ```
 
-Output goes to `n8n-backups/launchd.log`. The job fails harmlessly if Docker
-or the drive holding the project is not available. To remove it:
+Output goes to `~/Library/Logs/n8nctl-backup.log`, on the internal disk on
+purpose: when the log path is on an external drive macOS can refuse it and
+the job never starts. With the project on an external drive, the job also
+needs Full Disk Access for `/bin/bash` (System Settings, Privacy & Security,
+Full Disk Access); without it the log shows `Operation not permitted`. The
+job fails harmlessly if Docker or the drive is not available. To remove it:
 
 ```bash
 launchctl bootout gui/$(id -u)/com.n8nctl.backup
@@ -523,7 +530,8 @@ volumes exist, set `N8N_VOLUME` to the right one.
 ├── README.md                 # this file: reference
 ├── docs/
 │   ├── learn.md              # concepts, how-tos, drills, glossary
-│   └── issues.md             # what needs attention on this install
+│   ├── issues.md             # what needs attention on this install
+│   └── backup-plan.md        # schedule, checks, recovery
 ├── CLAUDE.md                 # working rules for the repo (also read by Claude Code)
 ├── examples/
 │   └── compose.override.yml  # binds n8n to 127.0.0.1

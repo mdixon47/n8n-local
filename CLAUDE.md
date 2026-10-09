@@ -14,11 +14,11 @@ The n8n AI Assistant (a.k.a. n8n Assistant, module name `instance-ai`) is enable
 .
 ├── n8nctl.sh            # the wrapper; the only code we own
 ├── README.md            # reference
-├── docs/                # learn.md: guided tour (concepts, how-tos, drills); issues.md: open items
+├── docs/                # learn.md: guided tour; issues.md: open items; backup-plan.md: schedule, checks, recovery
 ├── n8nctl.log           # append-only: installer hashes, installs, upgrades, backups
 ├── test/                # smoke.sh + stub docker/curl + vendored installer fixtures
 ├── examples/            # compose.override.yml template (binds n8n to 127.0.0.1)
-├── launchd/             # nightly backup LaunchAgent for macOS
+├── launchd/             # nightly backup LaunchAgent (23:00, keep 14; log in ~/Library/Logs; needs Full Disk Access for /bin/bash)
 ├── templates-api/       # local Templates gallery: server.py + build.py; data/ generated, gitignored
 ├── n8n/                 # CREATED BY THE UPSTREAM INSTALLER - treat as generated
 │   ├── compose.yml

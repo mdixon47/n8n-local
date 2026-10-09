@@ -13,9 +13,9 @@
   <key>StartCalendarInterval</key>
   <dict>
     <key>Hour</key>
-    <integer>3</integer>
+    <integer>23</integer>
     <key>Minute</key>
-    <integer>30</integer>
+    <integer>0</integer>
   </dict>
   <key>EnvironmentVariables</key>
   <dict>
@@ -25,8 +25,8 @@
     <string>1</string>
   </dict>
   <key>StandardOutPath</key>
-  <string>/Volumes/Seagate HDD Media/projects/n8n-local/n8n-backups/launchd.log</string>
+  <string>/Users/malikdixon/Library/Logs/n8nctl-backup.log</string>
   <key>StandardErrorPath</key>
-  <string>/Volumes/Seagate HDD Media/projects/n8n-local/n8n-backups/launchd.log</string>
+  <string>/Users/malikdixon/Library/Logs/n8nctl-backup.log</string>
 </dict>
 </plist>

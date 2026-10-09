@@ -385,8 +385,10 @@ pre-restore backup, `Stopping the stack`, `Preparing containers and volume`,
 pre-restore snapshot holds the state you just replaced, in case the drill
 itself was the mistake.
 
-Automate it on macOS with the launchd job in the README. It runs at 03:30
-and keeps fourteen snapshots.
+Automate it on macOS with the launchd job in the README. On this install it
+runs every night at 23:00 and keeps fourteen snapshots; [backup-plan.md](backup-plan.md)
+has the schedule, the weekly checks, and how to recover a single workflow
+without restoring everything.
 
 ## 11. How-to: upgrade and roll back
 
@@ -862,8 +864,8 @@ after adding it (section 17).
 
 **A workflow I did not delete is gone.** Check the archive first (Workflows
 list, archived filter). If it was deleted outright, every snapshot taken
-before the deletion still holds it; [issues.md](issues.md) describes the
-recovery of two such workflows.
+before the deletion still holds it. [backup-plan.md](backup-plan.md) shows
+how to bring back one workflow without restoring everything.
 
 **The Templates link opens n8n.io again.** Reload the editor tab; if it
 persists, `N8N_TEMPLATES_HOST` is missing from `.env` (section 20).
@@ -903,3 +905,4 @@ back with `restore` from a snapshot at the older version.
 - Template collection (your fork): <https://github.com/mdixon47/awesome-n8n-templates>,
   upstream <https://github.com/enescingoz/awesome-n8n-templates>
 - What needs attention on this install: [issues.md](issues.md)
+- How it is backed up and recovered: [backup-plan.md](backup-plan.md)
