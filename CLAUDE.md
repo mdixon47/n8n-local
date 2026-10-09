@@ -18,7 +18,7 @@ The n8n AI Assistant (a.k.a. n8n Assistant, module name `instance-ai`) is enable
 ├── n8nctl.log           # append-only: installer hashes, installs, upgrades, backups
 ├── test/                # smoke.sh + stub docker/curl + vendored installer fixtures
 ├── examples/            # compose.override.yml template (binds n8n to 127.0.0.1)
-├── launchd/             # nightly backup LaunchAgent (23:00, keep 14; log in ~/Library/Logs; needs Full Disk Access for /bin/bash)
+├── launchd/             # nightly backup LaunchAgent (23:00, keep 14) + n8nctl-backup.applescript, the app it opens; log in ~/Library/Logs
 ├── templates-api/       # local Templates gallery: server.py + build.py; data/ generated, gitignored
 ├── n8n/                 # CREATED BY THE UPSTREAM INSTALLER - treat as generated
 │   ├── compose.yml

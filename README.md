@@ -414,10 +414,12 @@ launchctl print gui/$(id -u)/com.n8nctl.backup | grep -E 'state|last exit code' 
 
 Output goes to `~/Library/Logs/n8nctl-backup.log`, on the internal disk on
 purpose: when the log path is on an external drive macOS can refuse it and
-the job never starts. With the project on an external drive, the job also
-needs Full Disk Access for `/bin/bash` (System Settings, Privacy & Security,
-Full Disk Access); without it the log shows `Operation not permitted`. The
-job fails harmlessly if Docker or the drive is not available. To remove it:
+the job never starts. With the project on an external drive, macOS also
+refuses a plain bash job access to it (`Operation not permitted`), so the
+plist opens a small app, `~/Applications/n8nctl Backup.app`, built from
+[launchd/n8nctl-backup.applescript](launchd/n8nctl-backup.applescript) and
+allowed once to use removable volumes. Build steps are in the backup plan.
+The job fails harmlessly if Docker or the drive is not available. To remove it:
 
 ```bash
 launchctl bootout gui/$(id -u)/com.n8nctl.backup

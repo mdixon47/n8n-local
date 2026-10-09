@@ -14,7 +14,7 @@ folder. Background on the commands is in [learn.md](learn.md) section 10.
 | Where | `n8n-backups/` on the Seagate USB drive; one copy |
 | Most work you can lose | About one day (everything since the last 23:00 run) |
 | Time to restore | A few minutes for the whole instance |
-| Runs as | LaunchAgent `com.n8nctl.backup`, log in `~/Library/Logs/n8nctl-backup.log` |
+| Runs as | LaunchAgent `com.n8nctl.backup`, which opens `~/Applications/n8nctl Backup.app`; log in `~/Library/Logs/n8nctl-backup.log` |
 
 ## What a snapshot holds
 
@@ -41,7 +41,10 @@ file is copied in a consistent state.
 
 ## Schedule and retention
 
-The job runs `./n8nctl.sh -y backup`, then `./n8nctl.sh -y backups --prune 14`.
+The LaunchAgent opens the *n8nctl Backup* app, which runs
+`./n8nctl.sh -y backup`, then `./n8nctl.sh -y backups --prune 14`, and
+writes start, output and exit status to the log. Why an app: see "The
+backup app" below.
 
 - **Pruning counts every snapshot** directly inside `n8n-backups/`:
   nightly, manual, pre-upgrade, pre-restore. Taking extra manual
@@ -70,9 +73,9 @@ These are known gaps, accepted on 2026-10-09:
   either the live data or the backups, not both.
 - **Fire, theft, power surge.** Both disks are in the same place.
 - **Mistakes noticed after 14 snapshots.** Older states are gone.
-- **Broad access for bash.** For the job to reach the Seagate drive,
-  `/bin/bash` has Full Disk Access. Any bash script on this Mac now has that
-  access too.
+- **The backup app can read the Seagate drive.** It was allowed access to
+  removable volumes. It runs only the two commands above, but anyone who can
+  edit `launchd/n8nctl-backup.applescript` and rebuild it controls what runs.
 
 The cheapest fixes, when wanted: copy the newest snapshot to a second disk
 each week, or to cloud storage as an encrypted archive. Never copy snapshots
@@ -83,19 +86,22 @@ anywhere unencrypted: each one contains the encryption key and API keys.
 | How often | Check | Healthy result |
 | --- | --- | --- |
 | Weekly | `./n8nctl.sh backups` | A snapshot from last night, reason `manual` |
-| Weekly | `launchctl print gui/$(id -u)/com.n8nctl.backup \| grep 'last exit code'` | `last exit code = 0` |
-| Weekly | `tail -20 ~/Library/Logs/n8nctl-backup.log` | Ends with `+ Backup written to ...` and a prune line |
+| Weekly | `tail -20 ~/Library/Logs/n8nctl-backup.log` | `+ Backup written to ...`, a prune line, and `n8nctl Backup app: exit 0` |
 | Monthly | `./n8nctl.sh verify n8n-backups/<newest>` | `+ Snapshot looks good` |
 | Every 3 months | The restore drill in learn.md section 10 | The deleted test workflow comes back |
 
 `./n8nctl.sh status` also prints `Last backup:` with its n8n version, so a
 stale date is visible there too.
 
+`launchctl print gui/$(id -u)/com.n8nctl.backup` reports `last exit code = 0`
+whenever the app opened, even if the backup inside it failed. The app's own
+`exit` line in the log is the one that counts.
+
 **If the job fails,** the reason is in the log:
 
 | Log says | Cause | Fix |
 | --- | --- | --- |
-| `Operation not permitted` | macOS blocks access to the external drive | Full Disk Access for `/bin/bash` (System Settings, Privacy & Security) |
+| `Operation not permitted` | The app's access to the drive was refused, revoked, or reset by rebuilding the app | Run the job by hand (below) and click **Allow**; or System Settings, Privacy & Security, Files and Folders, *n8nctl Backup*, Removable Volumes on |
 | `the Docker daemon is not running` | Docker Desktop not running | Start Docker Desktop; enable "Start Docker Desktop when you sign in" |
 | No log line at all, `spawn failed` | The log path or drive was unavailable | Check that the Seagate drive is mounted |
 
@@ -136,6 +142,33 @@ bot* and *Gmail Inbox Triage - Error Handler* were recovered on 2026-10-09:
 The credentials a workflow uses must still exist; they are stored
 separately and are not part of the workflow's row.
 
+## The backup app
+
+macOS refuses processes started by launchd access to an external drive
+unless they have been allowed, and a plain `/bin/bash` job has no way to
+ask (exit 126, `Operation not permitted`; an attempt to add `/bin/bash` to
+Full Disk Access never registered on this Mac). An app can ask, once. So the LaunchAgent
+runs `/usr/bin/open -W -g` on a small AppleScript app that does the work.
+
+- Source: `launchd/n8nctl-backup.applescript` (in git).
+- Installed: `~/Applications/n8nctl Backup.app`, bundle id
+  `local.n8nctl.backup`, ad-hoc signed, hidden from the Dock.
+- It never shows a dialog. Errors are written to the log, so an unattended
+  run cannot hang waiting for a click.
+
+Rebuild after changing the source. The signature changes with every build,
+so macOS asks for permission again on the next run; run it once by hand and
+click **Allow**:
+
+```bash
+APP="$HOME/Applications/n8nctl Backup.app"
+rm -rf "$APP" && osacompile -o "$APP" launchd/n8nctl-backup.applescript
+/usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string local.n8nctl.backup" \
+  -c "Add :LSUIElement bool true" "$APP/Contents/Info.plist"
+codesign --force --deep -s - "$APP"
+launchctl kickstart -k gui/$(id -u)/com.n8nctl.backup     # then click Allow
+```
+
 ## Changing the plan
 
 The schedule lives in two places that must match: the template
@@ -156,5 +189,6 @@ Then update the table at the top of this file.
 - **2026-10-09.** Plan written. Found that the original 03:30 job had never
   run (its log was on the external drive, which macOS blocked). Moved the
   log to `~/Library/Logs/`, changed the time to 23:00, kept 14 snapshots,
-  one copy. Full Disk Access for `/bin/bash` chosen over a dedicated
-  backup app.
+  one copy. Full Disk Access for `/bin/bash` was tried first and did not
+  take; replaced by the *n8nctl Backup* app, allowed once. First successful
+  run: 17:27 EDT, snapshot `20261009-212726`.

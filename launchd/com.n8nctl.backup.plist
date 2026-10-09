@@ -6,9 +6,13 @@
   <string>com.n8nctl.backup</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/bin/bash</string>
-    <string>-c</string>
-    <string>cd "/Volumes/Seagate HDD Media/projects/n8n-local" &amp;&amp; ./n8nctl.sh -y backup &amp;&amp; ./n8nctl.sh -y backups --prune 14</string>
+    <!-- Opens the n8nctl Backup app (launchd/n8nctl-backup.applescript), which runs
+         ./n8nctl.sh -y backup and backups --prune 14. A plain /bin/bash job is
+         refused access to the external drive; the app can be allowed once. -->
+    <string>/usr/bin/open</string>
+    <string>-W</string>
+    <string>-g</string>
+    <string>/Users/malikdixon/Applications/n8nctl Backup.app</string>
   </array>
   <key>StartCalendarInterval</key>
   <dict>
