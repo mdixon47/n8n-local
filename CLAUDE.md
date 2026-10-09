@@ -13,11 +13,13 @@ The n8n AI Assistant (a.k.a. n8n Assistant, module name `instance-ai`) is enable
 ```
 .
 ├── n8nctl.sh            # the wrapper; the only code we own
-├── README.md            # reference; learn.md is the guided tour (concepts, how-tos, drills)
+├── README.md            # reference
+├── docs/                # learn.md: guided tour (concepts, how-tos, drills); issues.md: open items
 ├── n8nctl.log           # append-only: installer hashes, installs, upgrades, backups
 ├── test/                # smoke.sh + stub docker/curl + vendored installer fixtures
 ├── examples/            # compose.override.yml template (binds n8n to 127.0.0.1)
 ├── launchd/             # nightly backup LaunchAgent for macOS
+├── templates-api/       # local Templates gallery: server.py + build.py; data/ generated, gitignored
 ├── n8n/                 # CREATED BY THE UPSTREAM INSTALLER - treat as generated
 │   ├── compose.yml
 │   ├── compose.override.yml  # ours: local customizations, picked up by the wrapper
@@ -78,6 +80,7 @@ Upstream installer flags: `--version [X]`, `--no-start`, `--upgrade`, `--help`. 
 - Execution pruning: `EXECUTIONS_DATA_PRUNE`, `EXECUTIONS_DATA_MAX_AGE` (hours, default 336), `EXECUTIONS_DATA_PRUNE_MAX_COUNT` (default 10000). Timezone: `GENERIC_TIMEZONE`.
 - n8n 3.0 also removes the "Any workflow" caller policy on sub-workflows (deprecated now).
 - Health endpoint: `http://localhost:5678/healthz`.
+- Templates: `N8N_TEMPLATES_ENABLED`, `N8N_TEMPLATES_HOST` (default `https://api.n8n.io/api/`). Any non-default host makes the editor's Templates link open the in-app gallery, fetched by the browser from that host (cross-origin, with credentials). Here it points at the `templates-api` service (port 5690); `python3 -I templates-api/build.py` rebuilds it from workflows tagged `template`.
 - The Assistant is in **Preview**. Generated workflows must be reviewed before production use.
 - The bundled sandbox and SQLite are positioned for local/dev. For production, n8n recommends Daytona for the sandbox and Postgres for the database (see the "Install using Docker Compose" and "Set up n8n Assistant" docs).
 - From n8n 3.0 (October 2026), npm/npx installs stop working. Docker is the only distribution path.
