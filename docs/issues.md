@@ -12,15 +12,63 @@ When an item is done, delete it here and mention it in the commit message.
 
 | # | Issue | Priority | Effort |
 | --- | --- | --- | --- |
-| 1 | Wrapper's module list is stale (2.35.3) | Soon | 15 min |
-| 2 | Version numbers in README and CLAUDE.md are stale | Soon | 10 min |
-| 3 | Scheduled workflows will skip missed runs (2.36 change) | Before activating them | 5 min |
-| 4 | No repeatable template import command | Later | 1-2 h |
-| 5 | Templates not imported, or imported with missing nodes | Optional | varies |
-| 6 | Housekeeping: duplicates, old exports, backup pruning | Later | 10 min |
-| 7 | Accepted risks to re-check | Review | none |
+| 1 | About 705 emails passed over without labels (cause fixed) | Optional | 15 min |
+| 2 | 20 blank Notion pages; 8 business emails to re-send | Now | 15 min |
+| 3 | Wrapper's module list is stale (2.35.3) | Soon | 15 min |
+| 4 | Version numbers in README and CLAUDE.md are stale | Soon | 10 min |
+| 5 | Scheduled workflows will skip missed runs (2.36 change) | Before activating them | 5 min |
+| 6 | No repeatable template import command | Later | 1-2 h |
+| 7 | Templates not imported, or imported with missing nodes | Optional | varies |
+| 8 | Housekeeping: duplicates, old exports, backup pruning | Later | 10 min |
+| 9 | Accepted risks to re-check | Review | none |
 
-## 1. Wrapper's module list is stale
+## 1. About 705 emails passed over without labels
+
+**Status:** open, optional. The cause is fixed.
+
+**What:** between 21:21 and 22:31 UTC on 2026-10-09, *Auto-label incoming
+Gmail messages with AI* failed 72 times, first because OpenAI rejected the
+key, then because the template only handled one email per run while the
+trigger was working through a backlog of ten at a time. The trigger had
+already marked those emails as seen, so about 705 emails were passed over
+without labels. They are still in Gmail, just unlabelled.
+
+Fixed on 2026-10-09: new OpenAI key in the *OpenAI account* credential;
+the label steps now map each email to its own label IDs (one *Map labels
+to IDs* Code node replaced *Split out*, *Merge* and *Aggregate*, and *Get
+all labels* runs once per run). First run after the fix labelled 3 of 8
+emails, the rest needed no label. Undo point: `n8n-backups/20261009-223039`.
+
+**To do, if wanted:** a one-off relabelling run over those emails, the
+same way as the Notion backfill in item 2. Ask for it.
+
+## 2. Blank pages in Notion and 8 business emails not saved
+
+**Status:** open; the cause is fixed.
+
+**What:** *Gmail Inbox Triage* read the subject as `subject`, but the Gmail
+trigger sends `Subject`, so every subject was empty. Notion then created
+each page with a blank title, and n8n's Notion node crashed reading that
+title (`Cannot read properties of undefined (reading 'plain_text')`). That
+left **20 untitled pages** under *n8n Email Inbox* in Notion (created
+17:20 to 18:13 EDT on 2026-10-09), and **8 business emails** were never
+saved, because each crash stopped its run part-way.
+
+Fixed on 2026-10-09 at 22:13 UTC: *Classify Email* reads `Subject`, and
+*Save To Notion* falls back to `(no subject)`. First run after the fix
+succeeded. Undo point: `n8n-backups/20261009-221316`.
+
+**To do:** delete the 20 untitled pages in Notion. Do **not** use
+*Retry* on the failed executions to fill the gap: a retry resumes at the
+failed node with the data it already had, empty subjects included, so it
+only adds `(no subject)` pages. A proper backfill is a one-off run over the
+28 affected emails, 20 with a blank page and 8 with none (their Gmail
+message IDs are in the stored executions):
+fetch each message, then create its Notion page. Ask for it if those emails
+matter; the trigger will not pick them up again on its own, because it
+already marked them as seen.
+
+## 3. Wrapper's module list is stale
 
 **Status:** open.
 
@@ -45,23 +93,23 @@ module, and change "2.35.3" to "2.42.6" where the docs describe the list
 type-availability-policies` is accepted (then disable it again unless
 wanted).
 
-## 2. Stale version numbers in the docs
+## 4. Stale version numbers in the docs
 
 **Status:** open. `docs/learn.md` is already updated.
 
 | File | Line | Says | Should say |
 | --- | --- | --- | --- |
 | CLAUDE.md | 43, 63 | `--version 2.35.3` in examples | `2.42.6` |
-| CLAUDE.md | 79 | `KNOWN_MODULES` "mirrors `modules.config.ts` at 2.35.3" | after item 1, `2.42.6` |
+| CLAUDE.md | 79 | `KNOWN_MODULES` "mirrors `modules.config.ts` at 2.35.3" | after item 3, `2.42.6` |
 | README.md | 68, 355 | `2.39.8` in install and upgrade examples | `2.42.6` |
-| README.md | 160, 168 | module list "at 2.35.3" | after item 1, `2.42.6` |
+| README.md | 160, 168 | module list "at 2.35.3" | after item 3, `2.42.6` |
 | README.md | 430 | "n8n 2.35 ships English only" | "n8n ships English only" |
 | README.md | Security notes, Layout | loopback binding as the setup | mention this install's LAN mode (learn.md 17) |
 
 **Done when:** `grep -n '2\.35\|2\.39' README.md CLAUDE.md` shows only
 historical log examples.
 
-## 3. Scheduled workflows will skip missed runs
+## 5. Scheduled workflows will skip missed runs
 
 **Status:** no action needed while they are off.
 
@@ -77,7 +125,7 @@ catch up on missed runs if they must not be skipped. To keep the Mac awake
 for good: System Settings, Energy, "Prevent automatic sleeping when the
 display is off".
 
-## 4. No repeatable template import
+## 6. No repeatable template import
 
 **Status:** open, improvement.
 
@@ -92,7 +140,7 @@ line, and report counts. Add smoke tests with a fixture template. Consider a
 `templates` subcommand that runs `templates-api/build.py`, and a
 `Templates:` line in `status` showing the gallery's health.
 
-## 5. Templates left out or incomplete
+## 7. Templates left out or incomplete
 
 **Status:** optional; import by hand if wanted (learn.md section 19).
 
@@ -126,7 +174,7 @@ purpose changes:
 - `OpenAI_and_LLMs/AI-Driven Lead Management and Inquiry Automation with ERPNext & n8n.json`
 - `OpenAI_and_LLMs/lemlist __ GPT-3_ Supercharge your sales workflows.json`
 
-## 6. Housekeeping
+## 8. Housekeeping
 
 - **Duplicate workflows:** three called *Auto-label incoming Gmail messages
   with AI*; one active, two archived. Delete the archived two once you are
@@ -145,7 +193,7 @@ purpose changes:
 - **Newer n8n:** 2.43.x images exist (2.43.3 on 2026-10-09). Read the 2.43
   release notes before moving; follow learn.md section 11.
 
-## 7. Accepted risks to re-check
+## 9. Accepted risks to re-check
 
 Chosen deliberately on 2026-10-09. Re-check if the network or the use
 changes.
