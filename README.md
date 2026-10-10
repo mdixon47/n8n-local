@@ -463,6 +463,19 @@ key under "keys on file" and a model whose provider has a key. If the generic
 key is set together with provider keys, the generic one is used for every
 provider. Check the model name exists at that provider.
 
+**Assistant: `Failed after 3 attempts ... The session has been destroyed`.**
+Node 26 (in the 2.42 image) makes `fetch` use HTTP/2, and the Assistant's
+parallel requests to OpenRouter died on one shared HTTP/2 connection
+(`ERR_HTTP2_INVALID_SESSION`); restarting only helped for a minute. Fixed
+here by preloading [runtime/force-http1.cjs](runtime/force-http1.cjs) into
+n8n (`NODE_OPTIONS` plus a read-only mount of `runtime/` in
+`n8n/compose.override.yml`), which switches `fetch` to HTTP/1.1. Check it is
+active with `./n8nctl.sh logs n8n | grep n8n-local`: expect
+`fetch uses HTTP/1.1`. A line saying `not applied` means the script could
+not find an `undici` 7 or 8 package in the n8n image (after an upgrade);
+fetch then behaves as before. n8n will not start if `runtime/` is missing,
+so keep it next to `n8n/`.
+
 **Installer changed since last run.** The wrapper shows both hashes and offers
 the file for review. Read the diff of the upstream script at
 <https://github.com/n8n-io/n8n/commits/master/docker/get-n8n.sh> before

@@ -198,6 +198,12 @@ purpose changes:
 Chosen deliberately on 2026-10-09. Re-check if the network or the use
 changes.
 
+- **n8n depends on `runtime/force-http1.cjs`** (2026-10-10). It is
+  preloaded into n8n to stop the Assistant's `The session has been
+  destroyed` errors (HTTP/2 under Node 26). After every n8n upgrade, check
+  `./n8nctl.sh logs n8n | grep n8n-local` says `fetch uses HTTP/1.1`. If a
+  later n8n fixes the HTTP/2 problem itself, remove the preload (README,
+  Troubleshooting).
 - **Plain HTTP on the home network** (learn.md 17). `N8N_SECURE_COOKIE=false`,
   port 5678 open on every interface, macOS firewall off. Logins and
   sessions are readable by anything on the network. Safer options: a

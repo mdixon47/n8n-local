@@ -20,6 +20,7 @@ The n8n AI Assistant (a.k.a. n8n Assistant, module name `instance-ai`) is enable
 ├── examples/            # compose.override.yml template (binds n8n to 127.0.0.1)
 ├── launchd/             # nightly backup LaunchAgent (23:00, keep 14) + n8nctl-backup.applescript, the app it opens; log in ~/Library/Logs
 ├── templates-api/       # local Templates gallery: server.py + build.py; data/ generated, gitignored
+├── runtime/             # force-http1.cjs: preloaded into n8n (NODE_OPTIONS) so fetch uses HTTP/1.1; n8n will not start without it
 ├── n8n/                 # CREATED BY THE UPSTREAM INSTALLER - treat as generated
 │   ├── compose.yml
 │   ├── compose.override.yml  # ours: local customizations, picked up by the wrapper
