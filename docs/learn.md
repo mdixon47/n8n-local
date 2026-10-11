@@ -162,7 +162,7 @@ Install:    /path/to/n8n-local/n8n
 n8n:        2.42.6    sandbox service: 1.3.4     ← from .env; upgrade changes these
 .env:       mode 600                             ← anything else is a warning
 Model:      anthropic/claude-opus-4-8 (n8n default)  ← what the Assistant uses
-Assistant:  OFF, no model key ...                ← or "keys on file: anthropic openrouter"
+Assistant:  OFF, no model key ...                ← or "keys on file: anthropic openai"
 Web search: bundled SearXNG                      ← or Brave when that key is set
 Modules:    (unset; n8n defaults)                ← N8N_ENABLED_MODULES
 Agents:     not in N8N_ENABLED_MODULES ...       ← or "enabled (Preview)"
@@ -330,26 +330,32 @@ practical setup is two keys on file and a one-line switch.
 
 ```bash
 ./n8nctl.sh set-key --provider anthropic      # primary
-./n8nctl.sh set-key --provider openrouter     # partner
+./n8nctl.sh set-key --provider openai         # partner
 ./n8nctl.sh set-key --remove                  # clear the generic key, if you ever set one
 ./n8nctl.sh status | grep Assistant
 ```
 
-Expected: `Assistant:  keys on file: anthropic openrouter`. If the line also
+Expected: `Assistant:  keys on file: anthropic openai`. If the line also
 says `generic`, that key overrides both, and the switch below would send the
 wrong key; the `--remove` step fixes it.
 
 When the primary is down:
 
 ```bash
-./n8nctl.sh set-model openrouter/anthropic/claude-opus-4.8
+./n8nctl.sh set-model openai/gpt-5.5
 ```
 
-Note the dot: OpenRouter's id for that model is `claude-opus-4.8`, while
-Anthropic's own API calls it `claude-opus-4-8`. Each provider's spelling
-applies. And back with `set-model anthropic/claude-opus-4-8`. Agents keep their own
+And back with `set-model anthropic/claude-opus-4-8`. Each provider's own
+model id applies: Anthropic writes `claude-opus-4-8` with dashes, while
+OpenRouter, if you use it as the partner instead, writes
+`anthropic/claude-opus-4.8` with a dot. Agents keep their own
 per-agent credential and are not affected; to move an agent, edit its model
 in the Agent Builder and publish again.
+
+This install switched on 2026-10-11 from OpenRouter to Anthropic plus
+OpenAI. The order that keeps the Assistant working throughout: add the new
+keys, `set-model` to the new provider, try the sidebar, then
+`set-key --provider openrouter --remove`.
 
 ## 10. How-to: the backup drill
 

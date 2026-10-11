@@ -14,13 +14,14 @@ When an item is done, delete it here and mention it in the commit message.
 | --- | --- | --- | --- |
 | 1 | About 705 emails passed over without labels (cause fixed) | Optional | 15 min |
 | 2 | 20 blank Notion pages; 8 business emails to re-send | Now | 15 min |
-| 3 | Wrapper's module list is stale (2.35.3) | Soon | 15 min |
-| 4 | Version numbers in README and CLAUDE.md are stale | Soon | 10 min |
-| 5 | Scheduled workflows will skip missed runs (2.36 change) | Before activating them | 5 min |
-| 6 | No repeatable template import command | Later | 1-2 h |
-| 7 | Templates not imported, or imported with missing nodes | Optional | varies |
-| 8 | Housekeeping: duplicates, old exports, backup pruning | Later | 10 min |
-| 9 | Accepted risks to re-check | Review | none |
+| 3 | Large uploads fail with `bad record mac` (home network) | Soon | 15 min |
+| 4 | Wrapper's module list is stale (2.35.3) | Soon | 15 min |
+| 5 | Version numbers in README and CLAUDE.md are stale | Soon | 10 min |
+| 6 | Scheduled workflows will skip missed runs (2.36 change) | Before activating them | 5 min |
+| 7 | No repeatable template import command | Later | 1-2 h |
+| 8 | Templates not imported, or imported with missing nodes | Optional | varies |
+| 9 | Housekeeping: duplicates, old exports, backup pruning | Later | 10 min |
+| 10 | Accepted risks to re-check | Review | none |
 
 ## 1. About 705 emails passed over without labels
 
@@ -68,7 +69,50 @@ fetch each message, then create its Notion page. Ask for it if those emails
 matter; the trigger will not pick them up again on its own, because it
 already marked them as seen.
 
-## 3. Wrapper's module list is stale
+## 3. Large uploads fail with `bad record mac`
+
+**Status:** open. Not an n8n, Docker or LinkedIn fault.
+
+**What:** on 2026-10-11 at 05:24 and 05:25 UTC a workflow's LinkedIn node
+failed four times with `ssl/tls alert bad record mac ... SSL alert number
+20` (the stack goes through `linkedInApiRequest`, `requestOAuth2`). The
+server received encrypted data that did not match its checksum, i.e. bytes
+were damaged on the way. Tested the same day with 2 MB POSTs, 15 per host:
+
+| From | api.linkedin.com | api.github.com |
+| --- | --- | --- |
+| the Mac | 1 failed | 2 failed |
+| the n8n container | 1 failed | 3 failed |
+
+Requests of 64 KB never failed; 1-5 MB ones failed to every host tried,
+Anthropic included. So the fault is between the Mac and the internet. No
+VPN, proxy or network extension is active. The Mac is on Wi-Fi `en1`
+(802.11ax, 6 GHz, 160 MHz channel, signal -42 dBm) behind the router at
+`10.0.0.1`. Restarting n8n does not help. Large Assistant requests (long
+conversations) can fail the same way.
+
+**Fix, easiest first:** restart the router; move the Mac to the 5 GHz
+band; try Ethernet or a phone hotspot to find which link is at fault. As a
+workaround that does not fix the cause, set **Retry On Fail** on the
+LinkedIn node (Settings tab: 3 tries, about 5 s apart).
+
+**Done when:** this check reports `0 failed` from the Mac and from the
+container:
+
+```bash
+cat > /tmp/bigpost.js <<'JS'
+const https=require("https");const N=15,sz=2*1024*1024;
+(async()=>{for(const h of ["api.linkedin.com","api.github.com"]){let f=0;for(let i=0;i<N;i++){await new Promise(r=>{const q=https.request({host:h,path:"/x",method:"POST",timeout:30000,agent:false,headers:{"content-length":sz}},s=>{s.resume();s.on("end",r)});q.on("error",()=>{f++;r()});q.on("timeout",()=>q.destroy(new Error("t")));q.end(Buffer.alloc(sz,97))})}console.log(h,`2MB x${N}: ${f} failed`)}})()
+JS
+node /tmp/bigpost.js
+docker exec -i n8n-n8n-1 node - < /tmp/bigpost.js
+```
+
+The script sends 2 MB of the letter `a` with no credentials; servers answer
+401 or 404, which counts as a pass. Only a dropped connection counts as a
+failure.
+
+## 4. Wrapper's module list is stale
 
 **Status:** open.
 
@@ -93,23 +137,23 @@ module, and change "2.35.3" to "2.42.6" where the docs describe the list
 type-availability-policies` is accepted (then disable it again unless
 wanted).
 
-## 4. Stale version numbers in the docs
+## 5. Stale version numbers in the docs
 
 **Status:** open. `docs/learn.md` is already updated.
 
 | File | Line | Says | Should say |
 | --- | --- | --- | --- |
 | CLAUDE.md | 43, 63 | `--version 2.35.3` in examples | `2.42.6` |
-| CLAUDE.md | 79 | `KNOWN_MODULES` "mirrors `modules.config.ts` at 2.35.3" | after item 3, `2.42.6` |
+| CLAUDE.md | 79 | `KNOWN_MODULES` "mirrors `modules.config.ts` at 2.35.3" | after item 4, `2.42.6` |
 | README.md | 68, 355 | `2.39.8` in install and upgrade examples | `2.42.6` |
-| README.md | 160, 168 | module list "at 2.35.3" | after item 3, `2.42.6` |
+| README.md | 160, 168 | module list "at 2.35.3" | after item 4, `2.42.6` |
 | README.md | 430 | "n8n 2.35 ships English only" | "n8n ships English only" |
 | README.md | Security notes, Layout | loopback binding as the setup | mention this install's LAN mode (learn.md 17) |
 
 **Done when:** `grep -n '2\.35\|2\.39' README.md CLAUDE.md` shows only
 historical log examples.
 
-## 5. Scheduled workflows will skip missed runs
+## 6. Scheduled workflows will skip missed runs
 
 **Status:** no action needed while they are off.
 
@@ -125,7 +169,7 @@ catch up on missed runs if they must not be skipped. To keep the Mac awake
 for good: System Settings, Energy, "Prevent automatic sleeping when the
 display is off".
 
-## 6. No repeatable template import
+## 7. No repeatable template import
 
 **Status:** open, improvement.
 
@@ -140,7 +184,7 @@ line, and report counts. Add smoke tests with a fixture template. Consider a
 `templates` subcommand that runs `templates-api/build.py`, and a
 `Templates:` line in `status` showing the gallery's health.
 
-## 7. Templates left out or incomplete
+## 8. Templates left out or incomplete
 
 **Status:** optional; import by hand if wanted (learn.md section 19).
 
@@ -174,7 +218,7 @@ purpose changes:
 - `OpenAI_and_LLMs/AI-Driven Lead Management and Inquiry Automation with ERPNext & n8n.json`
 - `OpenAI_and_LLMs/lemlist __ GPT-3_ Supercharge your sales workflows.json`
 
-## 8. Housekeeping
+## 9. Housekeeping
 
 - **Duplicate workflows:** three called *Auto-label incoming Gmail messages
   with AI*; one active, two archived. Delete the archived two once you are
@@ -190,10 +234,15 @@ purpose changes:
   are under the gitignored `n8n/`. Snapshots carry them; git does not.
 - **Gallery data is not backed up:** `templates-api/data/` is generated.
   After any `restore`, run `python3 -I templates-api/build.py`.
+- **Old OpenRouter key:** the Assistant moved to Anthropic (OpenAI as
+  the second key) on 2026-10-11 and `OPENROUTER_API_KEY` was removed from
+  `.env`. Snapshots taken before then still hold it in their `.env`, until
+  pruned. Revoke it at openrouter.ai if no longer needed, and delete any
+  OpenRouter credential under Overview, Credentials that no workflow uses.
 - **Newer n8n:** 2.43.x images exist (2.43.3 on 2026-10-09). Read the 2.43
   release notes before moving; follow learn.md section 11.
 
-## 9. Accepted risks to re-check
+## 10. Accepted risks to re-check
 
 Chosen deliberately on 2026-10-09. Re-check if the network or the use
 changes.

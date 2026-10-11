@@ -203,21 +203,30 @@ The Assistant uses one model at a time and n8n has no automatic failover.
 Redundancy means keeping a key on file for each provider and switching in one
 command when the primary is down:
 
+This install runs Claude through Anthropic as the primary, with an OpenAI
+key as the partner (since 2026-10-11; OpenRouter before that):
+
 ```bash
 ./n8nctl.sh set-key --provider anthropic     # primary
-./n8nctl.sh set-key --provider openrouter    # partner / fallback
+./n8nctl.sh set-key --provider openai        # partner / fallback
 ./n8nctl.sh set-key --remove                 # clear the generic key so per-provider keys apply
-./n8nctl.sh status                           # "keys on file: anthropic openrouter"
+./n8nctl.sh status                           # "keys on file: anthropic openai"
 
-./n8nctl.sh set-model openrouter/anthropic/claude-opus-4.8   # switch when the primary is down
-./n8nctl.sh set-model anthropic/claude-opus-4-8              # and back
+./n8nctl.sh set-model openai/gpt-5.5             # switch when the primary is down
+./n8nctl.sh set-model anthropic/claude-opus-4-8  # and back
 ```
+
+Retiring a provider: switch the model away from it first, then
+`set-key --provider <name> --remove`. Snapshots taken earlier keep the old
+key in their `.env`, so revoke it at the provider too.
 
 If the generic key is still set, `set-key --provider` warns you: the generic
 key wins for every provider, so a model switch would send the wrong key.
 The model name must be one the provider offers, spelled the provider's way:
 Anthropic writes `claude-opus-4-8`, OpenRouter writes `anthropic/claude-opus-4.8`
 with a dot. Check with `curl -s https://openrouter.ai/api/v1/models | grep -o '"id":"anthropic/[^"]*'`.
+For Anthropic and OpenAI the list needs the key (`GET /v1/models` on
+`api.anthropic.com` or `api.openai.com`).
 
 Agents are unaffected by `set-model`. An agent's model is fixed per agent;
 failing an agent over to another provider means editing the agent in the
@@ -475,6 +484,16 @@ active with `./n8nctl.sh logs n8n | grep n8n-local`: expect
 not find an `undici` 7 or 8 package in the n8n image (after an upgrade);
 fetch then behaves as before. n8n will not start if `runtime/` is missing,
 so keep it next to `n8n/`.
+
+**`ssl/tls alert bad record mac ... SSL alert number 20`.** The server got
+encrypted data that was damaged on the way. Here it hit uploads of about
+1 MB and up (LinkedIn image posts, long Assistant conversations) from the
+Mac and from containers alike, to every host tried, so the cause is the
+network path, not n8n or Docker. Restarting n8n does not help. Restart the
+router, change Wi-Fi band, or try another connection; meanwhile Retry On
+Fail on the affected node gets most runs through.
+[docs/issues.md](docs/issues.md) item 3 has the details and a check
+script.
 
 **Installer changed since last run.** The wrapper shows both hashes and offers
 the file for review. Read the diff of the upstream script at
