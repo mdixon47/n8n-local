@@ -91,13 +91,24 @@ VPN, proxy or network extension is active. The Mac is on Wi-Fi `en1`
 `10.0.0.1`. Restarting n8n does not help. Large Assistant requests (long
 conversations) can fail the same way.
 
-**Fix, easiest first:** restart the router; move the Mac to the 5 GHz
-band; try Ethernet or a phone hotspot to find which link is at fault. As a
-workaround that does not fix the cause, set **Retry On Fail** on the
-LinkedIn node (Settings tab: 3 tries, about 5 s apart).
+Re-tested at about 14:15 UTC the same day: 0 of 60 failed, from both sides.
+So it comes and goes, and a passing check proves little on its own.
+
+One lead: the Mac's network counters show no bad packets, so the bytes
+were probably damaged before the Mac checksummed them, not in transit.
+`en1` has TCP segmentation offload on (`TSO4,TSO6`), a known cause of this.
+Testing it only means something while failures are happening.
+
+**Fix, easiest first:** while it is failing, turn TSO off
+(`sudo sysctl -w net.inet.tcp.tso=0`, undone by a reboot or `=1`) and
+re-run the check below; if that clears it, make the setting permanent.
+Otherwise restart the router; move the Mac to the 5 GHz band; try Ethernet
+or a phone hotspot to find which link is at fault. As a workaround that
+does not fix the cause, set **Retry On Fail** on the LinkedIn node
+(Settings tab: 3 tries, about 5 s apart).
 
 **Done when:** this check reports `0 failed` from the Mac and from the
-container:
+container on several days, and the LinkedIn node stops failing:
 
 ```bash
 cat > /tmp/bigpost.js <<'JS'
@@ -161,13 +172,12 @@ historical log examples.
 down or the Mac slept, unless the trigger is set to coalesce them. Three of
 your workflows use one, all inactive today: *Weekly Content Generator
 (Monday)*, *Daily LinkedIn Poster*, *Weekly Content Pipeline (Gemini →
-LinkedIn)*. The Mac's sleep is currently held off by other apps, which is
-not a guarantee.
+LinkedIn)*. Since 2026-10-11 the Mac does not sleep on AC power
+(`pmset -c sleep 0`), but it still sleeps after 1 minute on UPS power, and
+n8n is down whenever the Mac is off or restarting.
 
 **Fix, before activating any of them:** in the trigger's options, choose to
-catch up on missed runs if they must not be skipped. To keep the Mac awake
-for good: System Settings, Energy, "Prevent automatic sleeping when the
-display is off".
+catch up on missed runs if they must not be skipped.
 
 ## 7. No repeatable template import
 
@@ -253,6 +263,19 @@ changes.
   `./n8nctl.sh logs n8n | grep n8n-local` says `fetch uses HTTP/1.1`. If a
   later n8n fixes the HTTP/2 problem itself, remove the preload (README,
   Troubleshooting).
+- **The project lives on the Seagate USB drive, and Docker reads files
+  from it.** `runtime/` (n8n), `templates-api/` (gallery) and
+  `searxng-settings.yml` are bind mounts. On 2026-10-11 all three had gone
+  dead inside the running containers (`ls: ... Bad file descriptor`); the
+  gallery answered HTTP 500, and n8n kept going only because it had already
+  loaded `force-http1.cjs`. The power log showed the Mac sleeping and waking
+  on a USB connect event that morning. `./n8nctl.sh stop` then `start`
+  recreated the containers and fixed it. To prevent it, set the same day:
+  `pmset -a disksleep 0` and `pmset -c sleep 0` (check with
+  `pmset -g custom`; the `Disk sleep should be non-zero` warning for UPS
+  Power is expected). Check the mounts with
+  `docker exec n8n-n8n-1 ls /opt/n8n-local`. Moving the project to the
+  internal disk would remove the risk.
 - **Plain HTTP on the home network** (learn.md 17). `N8N_SECURE_COOKIE=false`,
   port 5678 open on every interface, macOS firewall off. Logins and
   sessions are readable by anything on the network. Safer options: a

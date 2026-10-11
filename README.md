@@ -495,6 +495,15 @@ Fail on the affected node gets most runs through.
 [docs/issues.md](docs/issues.md) item 3 has the details and a check
 script.
 
+**`Bad file descriptor` inside a container, gallery answers 500, or n8n
+will not start with `Cannot find module '/opt/n8n-local/force-http1.cjs'`.**
+Docker's bind mounts into the project folder have gone dead, usually after
+the Mac slept or the external drive dropped off. The files are fine on the
+Mac. Check with `docker exec n8n-n8n-1 ls /opt/n8n-local`; fix with
+`./n8nctl.sh stop` then `./n8nctl.sh start`, which recreates the
+containers. Keep the drive and the Mac from sleeping on AC power
+(`sudo pmset -a disksleep 0`, `sudo pmset -c sleep 0`).
+
 **Installer changed since last run.** The wrapper shows both hashes and offers
 the file for review. Read the diff of the upstream script at
 <https://github.com/n8n-io/n8n/commits/master/docker/get-n8n.sh> before

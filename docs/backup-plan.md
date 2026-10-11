@@ -58,8 +58,9 @@ backup app" below.
   drive has over 7 TB free. Size grows with stored executions; learn.md
   section 13 covers execution pruning.
 
-**When a run is skipped:** if the Mac is asleep at 23:00, macOS runs the job
-when it wakes. If the Mac is off, or the Seagate drive is unplugged, or
+**When a run is skipped:** since 2026-10-11 the Mac does not sleep on AC
+power (`pmset -c sleep 0`), so the job normally runs on time. If the Mac is
+asleep at 23:00 (on UPS power), macOS runs the job when it wakes. If the Mac is off, or the Seagate drive is unplugged, or
 Docker is not running, that night has no backup. The next night's run is
 not affected.
 
