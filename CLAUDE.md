@@ -19,7 +19,7 @@ The n8n AI Assistant (a.k.a. n8n Assistant, module name `instance-ai`) is enable
 ├── test/                # smoke.sh + stub docker/curl + vendored installer fixtures
 ├── examples/            # compose.override.yml template (binds n8n to 127.0.0.1)
 ├── launchd/             # nightly backup LaunchAgent (23:00, keep 14) + n8nctl-backup.applescript, the app it opens; log in ~/Library/Logs
-├── templates-api/       # local Templates gallery: server.py + build.py; data/ generated, gitignored
+├── templates-api/       # local Templates gallery + ideas page: server.py, build.py, web/; data/ generated, gitignored
 ├── runtime/             # force-http1.cjs: preloaded into n8n (NODE_OPTIONS) so fetch uses HTTP/1.1; n8n will not start without it
 ├── n8n/                 # CREATED BY THE UPSTREAM INSTALLER - treat as generated
 │   ├── compose.yml
@@ -81,7 +81,8 @@ Upstream installer flags: `--version [X]`, `--no-start`, `--upgrade`, `--help`. 
 - Execution pruning: `EXECUTIONS_DATA_PRUNE`, `EXECUTIONS_DATA_MAX_AGE` (hours, default 336), `EXECUTIONS_DATA_PRUNE_MAX_COUNT` (default 10000). Timezone: `GENERIC_TIMEZONE`.
 - n8n 3.0 also removes the "Any workflow" caller policy on sub-workflows (deprecated now).
 - Health endpoint: `http://localhost:5678/healthz`.
-- Templates: `N8N_TEMPLATES_ENABLED`, `N8N_TEMPLATES_HOST` (default `https://api.n8n.io/api/`). Any non-default host makes the editor's Templates link open the in-app gallery, fetched by the browser from that host (cross-origin, with credentials). Here it points at the `templates-api` service (port 5690); `python3 -I templates-api/build.py` rebuilds it from workflows tagged `template`.
+- Templates: `N8N_TEMPLATES_ENABLED`, `N8N_TEMPLATES_HOST` (default `https://api.n8n.io/api/`). Any non-default host makes the editor's Templates link open the in-app gallery, fetched by the browser from that host (cross-origin, with credentials). Here it points at the `templates-api` service (port 5690); `python3 -I templates-api/build.py` rebuilds it from workflows tagged `template`. The Assistant's "See all" link ignores the templates host and always targets `https://n8n.io/workflows/`.
+- `EXTERNAL_FRONTEND_HOOKS_URLS` (`;`-separated script URLs) is injected into the editor's `index.html` as `<script nonce=...>` tags at startup; needs an n8n restart. Here it loads `templates-api/web/editor-hook.js`, which sends n8n.io/workflows links to the ideas page at port 5690. Node icons under `/icons/...` on 5678 need a login, so `build.py` copies them into `templates-api/data/icons/`.
 - The Assistant is in **Preview**. Generated workflows must be reviewed before production use.
 - The bundled sandbox and SQLite are positioned for local/dev. For production, n8n recommends Daytona for the sandbox and Postgres for the database (see the "Install using Docker Compose" and "Set up n8n Assistant" docs).
 - From n8n 3.0 (October 2026), npm/npx installs stop working. Docker is the only distribution path.

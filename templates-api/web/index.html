@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Workflow Ideas</title>
+  <meta name="description" content="Ideas to build with the n8n Assistant, and the workflow templates on this instance.">
+  <link rel="stylesheet" href="app.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#templates">Skip to templates</a>
+  <header class="top">
+    <div class="wrap top-row">
+      <div class="brand">
+        <h1>Workflow ideas</h1>
+        <p class="sub" id="sub">Ideas to build with the Assistant, and templates that run on this n8n.</p>
+      </div>
+      <nav class="top-links" aria-label="n8n">
+        <a id="link-assistant" href="#" target="_blank" rel="noopener">Assistant</a>
+        <a id="link-editor" href="#" target="_blank" rel="noopener">Open n8n</a>
+      </nav>
+    </div>
+    <div class="wrap">
+      <label class="search">
+        <span class="visually-hidden">Search ideas and templates</span>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input id="q" type="search" autocomplete="off" spellcheck="false" placeholder="Search ideas and templates, e.g. gmail label, telegram bot, invoice">
+        <kbd aria-hidden="true">/</kbd>
+      </label>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section id="ideas" aria-labelledby="ideas-h">
+      <div class="section-head">
+        <h2 id="ideas-h">Ideas to build <span class="count" id="ideas-count"></span></h2>
+        <p class="hint">Each one opens the Assistant with a ready prompt. Edit it before you send.</p>
+      </div>
+      <div class="chips" id="groups" role="tablist" aria-label="Idea groups"></div>
+      <p class="group-blurb" id="group-blurb"></p>
+      <div class="idea-grid" id="idea-grid"></div>
+      <button class="more" id="ideas-more" type="button" hidden></button>
+    </section>
+
+    <section id="templates" aria-labelledby="tpl-h">
+      <div class="section-head">
+        <h2 id="tpl-h">Templates <span class="count" id="tpl-count"></span></h2>
+        <div class="tools">
+          <button class="filter-toggle" id="filter-toggle" type="button" aria-expanded="false" aria-controls="filters">Filters</button>
+          <label class="sort">Sort
+            <select id="sort">
+              <option value="relevance">Best match</option>
+              <option value="name">A to Z</option>
+              <option value="newest">Newest</option>
+              <option value="simplest">Fewest nodes</option>
+            </select>
+          </label>
+        </div>
+      </div>
+      <div class="tpl-layout">
+        <aside class="filters" id="filters" aria-label="Filters"></aside>
+        <div>
+          <div class="active-filters" id="active-filters"></div>
+          <div class="tpl-grid" id="tpl-grid"></div>
+          <button class="more" id="tpl-more" type="button" hidden></button>
+          <div class="ask" id="ask" hidden>
+            <div>
+              <h3>Not what you need?</h3>
+              <p id="ask-text">Describe it to the Assistant and it builds the workflow for you.</p>
+            </div>
+            <button class="btn primary" id="ask-btn" type="button">Ask the Assistant</button>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="wrap foot">
+    <p id="foot">Served by templates-api on this machine. Templates are the workflows tagged <code>template</code>; rebuild with <code>python3 -I templates-api/build.py</code>.</p>
+  </footer>
+
+  <dialog id="detail" aria-labelledby="detail-title">
+    <div class="detail">
+      <header class="detail-head">
+        <div>
+          <p class="eyebrow" id="detail-eyebrow"></p>
+          <h2 id="detail-title"></h2>
+        </div>
+        <button class="icon-btn" id="detail-close" type="button" aria-label="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+        </button>
+      </header>
+      <div class="detail-body" id="detail-body"></div>
+    </div>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <noscript><p class="wrap">This page needs JavaScript.</p></noscript>
+</body>
+</html>

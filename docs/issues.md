@@ -289,6 +289,13 @@ changes.
   name, and the editor makes gallery requests with credentials. `server.py`
   reads only `Origin` and `Host`, to decide whether to send CORS headers,
   and never logs headers; keep it that way when changing it.
+- **A script from the gallery runs inside the editor** (2026-10-12).
+  `EXTERNAL_FRONTEND_HOOKS_URLS` loads `templates-api/web/editor-hook.js`
+  into every editor page, with the editor's full privileges, over the same
+  plain HTTP as the editor. Keep it small: no network requests, no reading
+  of n8n data. It types a prompt into the Assistant only when the tab was
+  opened from the ideas page, and never sends it. Whoever can edit the repo
+  can change what runs in the editor.
 - **`localhost` webhook and OAuth URLs** (learn.md 17). Connect OAuth
   credentials only from this Mac; replace `localhost` in webhook URLs when
   calling them from another machine.

@@ -6,6 +6,11 @@ browser fetches template data from that host. This server answers the same
 endpoints as api.n8n.io, serving the workflows that build.py extracted (those
 tagged `template` in this instance).
 
+It also serves the ideas page (web/index.html at /, with its assets), the
+node icons build.py copied into data/icons/, and web/editor-hook.js, which
+n8n loads into the editor (EXTERNAL_FRONTEND_HOOKS_URLS) so that links to
+n8n.io/workflows open the ideas page instead.
+
 Standard library only. Reads data/catalog.json and data/workflows/<id>.json,
 reloading the catalog when build.py rewrites it. Read-only: GET and OPTIONS.
 
@@ -29,6 +34,19 @@ from urllib.parse import parse_qs, urlsplit
 DATA_DIR = os.environ.get("TEMPLATES_DATA_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"))
 PORT = int(os.environ.get("TEMPLATES_PORT", "8080"))
 CATALOG = os.path.join(DATA_DIR, "catalog.json")
+WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
+ICON_DIR = os.path.join(DATA_DIR, "icons")
+# Files of the ideas page, by URL path. Nothing outside this list is served from web/.
+WEB_FILES = {
+    "": ("index.html", "text/html; charset=utf-8"),
+    "index.html": ("index.html", "text/html; charset=utf-8"),
+    "app.js": ("app.js", "text/javascript; charset=utf-8"),
+    "app.css": ("app.css", "text/css; charset=utf-8"),
+    "ideas.json": ("ideas.json", "application/json; charset=utf-8"),
+    "editor-hook.js": ("editor-hook.js", "text/javascript; charset=utf-8"),
+}
+PAGE_CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
+            "connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 EDITOR_PORT = int(os.environ.get("TEMPLATES_EDITOR_PORT", "5678"))
 
 AUTHOR = {"id": 0, "name": "This n8n instance", "username": "local", "bio": "", "verified": False, "links": "[]", "avatar": ""}
@@ -185,6 +203,39 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
+    def send_file(self, path, ctype, csp):
+        try:
+            with open(path, "rb") as fh:
+                payload = fh.read()
+        except FileNotFoundError:
+            return self.send_json(404, {"message": "Not found"})
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Content-Security-Policy", csp)
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def static(self, segs):
+        """Ideas page files and copied node icons; True if the path was one of them."""
+        key = "/".join(segs)
+        if key in WEB_FILES:
+            name, ctype = WEB_FILES[key]
+            self.send_file(os.path.join(WEB_DIR, name), ctype, PAGE_CSP)
+            return True
+        if segs[:1] == ["icons"] and len(segs) > 1 and key.endswith((".svg", ".png")):
+            path = os.path.realpath(os.path.join(DATA_DIR, *segs))
+            if not path.startswith(os.path.realpath(ICON_DIR) + os.sep):
+                self.send_json(404, {"message": "Not found"})
+                return True
+            ctype = "image/svg+xml" if key.endswith(".svg") else "image/png"
+            # An SVG opened on its own must not run script.
+            self.send_file(path, ctype, "default-src 'none'; style-src 'unsafe-inline'")
+            return True
+        return False
+
     def do_OPTIONS(self):
         self.send_response(204)
         if self.cors():
@@ -201,10 +252,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         parts = urlsplit(self.path)
         segs = [s for s in parts.path.split("/") if s]
-        if segs[:1] == ["api"]:
-            segs = segs[1:]
         qs = parse_qs(parts.query, keep_blank_values=True)
         try:
+            if segs[:1] != ["api"] and self.static(segs):
+                return
+            if segs[:1] == ["api"]:
+                segs = segs[1:]
             self.route(segs, qs)
         except Exception as exc:  # keep serving; report without request details
             print(f"error handling {parts.path}: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
@@ -219,6 +272,9 @@ class Handler(BaseHTTPRequestHandler):
                 {"id": c["id"], "name": c["name"], "displayName": None, "icon": c["icon"], "parent": None}
                 for c in cat["categories"]
             ]})
+        if segs == ["local", "catalog"]:
+            # The whole catalog, for the ideas page (it filters in the browser).
+            return self.send_json(200, cat)
         if segs == ["templates", "collections"]:
             return self.send_json(200, {"collections": []})
         if segs == ["templates", "search"]:

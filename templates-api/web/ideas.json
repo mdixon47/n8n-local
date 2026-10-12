@@ -1,0 +1,506 @@
+{
+  "groups": [
+    {
+      "id": "ops",
+      "name": "Run this n8n",
+      "topics": [
+        "it-ops"
+      ],
+      "blurb": "Keep the instance itself healthy and noisy when it should be."
+    },
+    {
+      "id": "inbox",
+      "name": "Inbox and email",
+      "topics": [],
+      "blurb": "Less time in Gmail, nothing important missed."
+    },
+    {
+      "id": "content",
+      "name": "Content and social",
+      "topics": [
+        "marketing"
+      ],
+      "blurb": "From idea to scheduled post, with you approving."
+    },
+    {
+      "id": "sales",
+      "name": "Leads and clients",
+      "topics": [
+        "sales"
+      ],
+      "blurb": "Every lead logged, followed up and summarized."
+    },
+    {
+      "id": "docs",
+      "name": "Documents and data",
+      "topics": [],
+      "blurb": "Pull facts out of files and put them where you need them."
+    },
+    {
+      "id": "support",
+      "name": "Support and chat",
+      "topics": [
+        "support"
+      ],
+      "blurb": "Bots that answer, and know when to hand over."
+    },
+    {
+      "id": "ai",
+      "name": "AI agents",
+      "topics": [
+        "ai"
+      ],
+      "blurb": "Agents that use tools, remember, and ask before acting."
+    },
+    {
+      "id": "personal",
+      "name": "Personal",
+      "topics": [],
+      "blurb": "Small automations for your own day."
+    }
+  ],
+  "ideas": [
+    {
+      "id": "failure-alerts",
+      "group": "ops",
+      "title": "Email me when any workflow fails",
+      "summary": "One error workflow for the whole instance, so a failing run is noticed in minutes, not days.",
+      "apps": [
+        "Gmail"
+      ],
+      "trigger": "Error",
+      "level": "Quick",
+      "prompt": "Build an error workflow: an Error Trigger that sends me one Gmail message per failure, with the workflow name, the failed node, the error message, and a link to the execution. Use my existing Gmail credential. Add a short note on how to set it as the error workflow of my other workflows, and remind me to activate it.",
+      "match": [
+        "Error Trigger"
+      ]
+    },
+    {
+      "id": "weekly-failures",
+      "group": "ops",
+      "title": "Weekly report of failed executions",
+      "summary": "Every Monday, a table of what failed last week and how often, grouped by workflow.",
+      "apps": [
+        "n8n",
+        "Gmail"
+      ],
+      "trigger": "Schedule",
+      "level": "Medium",
+      "prompt": "Every Monday at 08:00, use the n8n node to list executions with status error from the last 7 days, group them by workflow with a count and the most common error message, and email me the result as an HTML table through Gmail. If nothing failed, send a one-line 'all clear' instead.",
+      "match": [
+        "execution",
+        "report|summar|digest|fail"
+      ]
+    },
+    {
+      "id": "retry-network",
+      "group": "ops",
+      "title": "Retry posts that failed on a flaky network",
+      "summary": "Re-runs uploads that died with a dropped connection, and only tells you if the retry also fails.",
+      "apps": [
+        "LinkedIn",
+        "Gmail"
+      ],
+      "trigger": "Error",
+      "level": "Medium",
+      "prompt": "Build an error workflow that checks whether the failure was a network error (messages containing 'bad record mac', 'ECONNRESET', 'socket hang up' or 'ETIMEDOUT'). If so, wait 2 minutes and retry the failed execution once using the n8n node; if the retry fails too, email me through Gmail. Other errors should be emailed straight away.",
+      "match": [
+        "Error Trigger",
+        "retry"
+      ]
+    },
+    {
+      "id": "inbox-labels",
+      "group": "inbox",
+      "title": "Label every new email with AI",
+      "summary": "New mail is sorted into your labels by meaning, not by brittle filters.",
+      "apps": [
+        "Gmail",
+        "OpenAI"
+      ],
+      "trigger": "App event",
+      "level": "Medium",
+      "prompt": "When a new Gmail message arrives, ask an AI model to choose one or more of my existing Gmail labels from the subject, sender and first 2000 characters of the body, then apply them. Handle several emails per run, skip anything already labelled, and leave mail unlabelled when the model is not confident.",
+      "match": [
+        "gmail|outlook|email|imap",
+        "label|categor|classif|sort"
+      ]
+    },
+    {
+      "id": "inbox-digest",
+      "group": "inbox",
+      "title": "Morning digest of important email",
+      "summary": "One message at 7:30 with what needs a reply, what can wait, and what to ignore.",
+      "apps": [
+        "Gmail",
+        "Anthropic"
+      ],
+      "trigger": "Schedule",
+      "level": "Quick",
+      "prompt": "Every weekday at 07:30, fetch unread Gmail messages from the last 24 hours, ask Claude to group them into 'needs a reply today', 'read later' and 'ignore', with one line each, and send the digest to me as a single Gmail message. Do not mark anything as read.",
+      "match": [
+        "email|gmail|imap|mail",
+        "digest|summar|brief"
+      ]
+    },
+    {
+      "id": "draft-replies",
+      "group": "inbox",
+      "title": "Draft replies to routine questions",
+      "summary": "Common questions get a ready draft in Gmail; you review and press send.",
+      "apps": [
+        "Gmail",
+        "OpenAI",
+        "Google Sheets"
+      ],
+      "trigger": "App event",
+      "level": "Medium",
+      "prompt": "When a new email arrives with the label 'Questions', look up my answers in a Google Sheet called 'FAQ' (columns: question, answer), ask an AI model to write a short reply in my tone using only those answers, and save it as a Gmail draft in the same thread. Never send it automatically; if no answer fits, add the label 'Needs me' instead.",
+      "match": [
+        "email|gmail|outlook",
+        "repl|respon|draft"
+      ]
+    },
+    {
+      "id": "attachments-to-drive",
+      "group": "inbox",
+      "title": "File invoices from email into Drive",
+      "summary": "PDF invoices land in a dated Drive folder and a row in a Sheet, without opening the email.",
+      "apps": [
+        "Gmail",
+        "Google Drive",
+        "Google Sheets"
+      ],
+      "trigger": "App event",
+      "level": "Medium",
+      "prompt": "When a Gmail message with a PDF attachment and 'invoice' in the subject or body arrives, save the PDF to Google Drive in a folder named after the year and month, then add a row to a Google Sheet called 'Invoices' with the date, sender, subject and the Drive link.",
+      "match": [
+        "invoice|attachment|receipt|spend"
+      ]
+    },
+    {
+      "id": "follow-up",
+      "group": "inbox",
+      "title": "Remind me when nobody replied",
+      "summary": "Emails you sent that got no answer in three days come back to you.",
+      "apps": [
+        "Gmail"
+      ],
+      "trigger": "Schedule",
+      "level": "Quick",
+      "prompt": "Every morning, find Gmail threads where my message was the last one and was sent more than 3 days ago with the label 'Follow up'. Email me a list with the subject, recipient and days waiting, each linking to the thread.",
+      "match": [
+        "follow"
+      ]
+    },
+    {
+      "id": "linkedin-approval",
+      "group": "content",
+      "title": "LinkedIn post drafts you approve first",
+      "summary": "AI writes the draft, you get it in Telegram with Approve / Rewrite buttons, and only approved posts go out.",
+      "apps": [
+        "LinkedIn",
+        "Telegram",
+        "Google Gemini"
+      ],
+      "trigger": "Schedule",
+      "level": "Advanced",
+      "prompt": "Every Tuesday and Thursday at 09:00, take the next unused idea from a Google Sheet called 'Post ideas', ask an AI model for a LinkedIn post under 1200 characters, and send it to me on Telegram with Approve and Rewrite buttons (send and wait for response). On Approve, publish it to LinkedIn and mark the idea as used; on Rewrite, generate a new version with my feedback. Set Retry On Fail on the LinkedIn node.",
+      "match": [
+        "linkedin"
+      ]
+    },
+    {
+      "id": "url-to-posts",
+      "group": "content",
+      "title": "Turn an article into a week of posts",
+      "summary": "Paste a URL into a form, get platform-specific drafts in a Sheet.",
+      "apps": [
+        "OpenAI",
+        "Google Sheets"
+      ],
+      "trigger": "Form",
+      "level": "Medium",
+      "prompt": "Create an n8n form with a URL field. Fetch the page, extract the main text, and ask an AI model for five short social posts (LinkedIn, X and a newsletter blurb), each with a different angle. Append them to a Google Sheet called 'Content queue' with the source URL and a status of 'draft'.",
+      "match": [
+        "article|blog|repurpos|thread|caption|social media"
+      ]
+    },
+    {
+      "id": "topic-watch",
+      "group": "content",
+      "title": "Watch a topic and summarize what is new",
+      "summary": "Hacker News and RSS, filtered to what you care about, in one short daily note.",
+      "apps": [
+        "RSS",
+        "Hacker News",
+        "Discord"
+      ],
+      "trigger": "Schedule",
+      "level": "Quick",
+      "prompt": "Every evening, read my RSS feeds (list them in a Set node) and the Hacker News front page, keep items that mention any of my keywords (also a Set node), ask an AI model for a two-sentence summary of each, and post the list to my Discord channel through a webhook.",
+      "match": [
+        "rss|hacker news|\\bfeeds?\\b|\\bnews\\b"
+      ]
+    },
+    {
+      "id": "lead-intake",
+      "group": "sales",
+      "title": "Website lead to Sheet, CRM note and alert",
+      "summary": "Every form submission is logged, scored and announced while it is still warm.",
+      "apps": [
+        "Google Sheets",
+        "Gmail",
+        "Telegram"
+      ],
+      "trigger": "Webhook",
+      "level": "Quick",
+      "prompt": "Create a webhook that receives website contact form submissions (name, email, company, message). Append each one to a Google Sheet called 'Leads' with a timestamp, ask an AI model to rate it hot, warm or cold with a one-line reason, and send hot leads to me on Telegram immediately. Reply to the webhook with a 200 and a short JSON confirmation.",
+      "match": [
+        "lead"
+      ]
+    },
+    {
+      "id": "lead-qualify",
+      "group": "sales",
+      "title": "Qualify inbound leads with research",
+      "summary": "Before you reply, an agent looks up the company and drafts the first answer.",
+      "apps": [
+        "Gmail",
+        "OpenAI",
+        "SearXNG"
+      ],
+      "trigger": "App event",
+      "level": "Advanced",
+      "prompt": "When an email with the label 'Lead' arrives, have an AI agent with a web search tool find the sender's company, size and industry, decide whether it fits my ideal client (describe it in the system prompt), and save a Gmail draft reply plus a row in a Google Sheet called 'Pipeline' with the findings and a fit score from 1 to 5.",
+      "match": [
+        "lead|prospect|sales",
+        "qualif|enrich|research|scor"
+      ]
+    },
+    {
+      "id": "meeting-actions",
+      "group": "sales",
+      "title": "Meeting transcript to next steps",
+      "summary": "Drop a transcript in Drive; get decisions, owners and a follow-up email draft.",
+      "apps": [
+        "Google Drive",
+        "OpenAI",
+        "Gmail"
+      ],
+      "trigger": "App event",
+      "level": "Medium",
+      "prompt": "When a new text or Google Docs file appears in the Drive folder 'Transcripts', extract decisions, action items with owners and due dates, and open questions using an AI model with a structured output parser. Save them to a Google Sheet called 'Actions' and create a Gmail draft follow-up to the attendees listed in the transcript.",
+      "match": [
+        "meeting|transcript"
+      ]
+    },
+    {
+      "id": "invoice-extract",
+      "group": "docs",
+      "title": "Read invoices into a spreadsheet",
+      "summary": "Vendor, date, total and VAT pulled out of PDFs, checked, and logged.",
+      "apps": [
+        "Google Drive",
+        "OpenAI",
+        "Google Sheets"
+      ],
+      "trigger": "App event",
+      "level": "Medium",
+      "prompt": "When a PDF is added to the Google Drive folder 'Invoices', extract the text, ask an AI model with a structured output parser for vendor, invoice number, date, currency, net, tax and total, check that net plus tax equals total, and append a row to a Google Sheet called 'Invoice log'. Put rows that fail the check on a second tab called 'Check by hand'.",
+      "match": [
+        "invoice|receipt|spend|pdf|document",
+        "extract|pars|ocr"
+      ]
+    },
+    {
+      "id": "chat-with-drive",
+      "group": "docs",
+      "title": "Ask questions about your own documents",
+      "summary": "A chat that answers from the files in one Drive folder, and says where it found it.",
+      "apps": [
+        "Google Drive",
+        "OpenAI",
+        "Qdrant"
+      ],
+      "trigger": "Chat",
+      "level": "Advanced",
+      "prompt": "Build two workflows. The first runs daily: load new or changed files from the Google Drive folder 'Knowledge', split them into chunks, and store embeddings in a vector store. The second is a chat trigger with an AI agent that answers only from that vector store and cites the file name for each answer, saying so when the documents do not cover the question.",
+      "match": [
+        "vector store|rag\\b|chat with|knowledge"
+      ]
+    },
+    {
+      "id": "pdf-to-notion",
+      "group": "docs",
+      "title": "Summaries of long PDFs in Notion",
+      "summary": "A one-page brief per report, filed in a Notion database you can search.",
+      "apps": [
+        "Notion",
+        "Anthropic"
+      ],
+      "trigger": "Form",
+      "level": "Quick",
+      "prompt": "Create an n8n form where I upload a PDF and choose a category. Extract the text, ask Claude for a title, a five-bullet summary and the three most important numbers, and create a page in my Notion database 'Reading' with those fields and the category.",
+      "match": [
+        "summar",
+        "pdf|notion|document|report"
+      ]
+    },
+    {
+      "id": "faq-bot",
+      "group": "support",
+      "title": "Telegram bot that answers from your FAQ",
+      "summary": "Answers the common questions, and forwards the rest to you with context.",
+      "apps": [
+        "Telegram",
+        "Google Sheets",
+        "Anthropic"
+      ],
+      "trigger": "App event",
+      "level": "Medium",
+      "prompt": "Build a Telegram bot: when a message arrives, an AI agent answers using a Google Sheet called 'FAQ' as its only tool and keeps a short memory per chat. If it cannot answer from the sheet, it tells the user someone will reply, and forwards the question and chat history to me in a private Telegram chat.",
+      "match": [
+        "telegram|whatsapp",
+        "bot|agent|support|chat"
+      ]
+    },
+    {
+      "id": "support-triage",
+      "group": "support",
+      "title": "Sort support email by urgency",
+      "summary": "Angry, urgent and billing mail jumps the queue; the rest is labelled and acknowledged.",
+      "apps": [
+        "Gmail",
+        "OpenAI",
+        "Slack"
+      ],
+      "trigger": "App event",
+      "level": "Medium",
+      "prompt": "When an email arrives at my support label, ask an AI model for category (billing, bug, how-to, other), urgency (1-3) and sentiment. Apply matching Gmail labels, send a short acknowledgement for how-to questions, and post urgency 3 or negative-sentiment emails to a Slack channel with a summary and a link.",
+      "match": [
+        "support|ticket|customer|feedback",
+        "classif|triage|sentiment|categor|resol"
+      ]
+    },
+    {
+      "id": "discord-helper",
+      "group": "support",
+      "title": "Discord helper for your community",
+      "summary": "Answers questions in one channel and keeps a log of what people ask.",
+      "apps": [
+        "Discord",
+        "OpenAI",
+        "Google Sheets"
+      ],
+      "trigger": "Webhook",
+      "level": "Medium",
+      "prompt": "Build a Discord helper: messages from one channel arrive through a webhook, an AI agent answers using my FAQ Google Sheet, replies in the channel, and appends the question, answer and whether it was answered to a Google Sheet called 'Community questions' so I can see what to document next.",
+      "match": [
+        "discord"
+      ]
+    },
+    {
+      "id": "research-agent",
+      "group": "ai",
+      "title": "Research agent that writes a brief",
+      "summary": "Give it a question; it searches the web, reads sources and returns a cited brief.",
+      "apps": [
+        "SearXNG",
+        "Anthropic",
+        "Notion"
+      ],
+      "trigger": "Chat",
+      "level": "Advanced",
+      "prompt": "Build a chat-triggered AI agent with an HTTP Request tool for web search (use the bundled SearXNG at http://searxng:8080/search?format=json&q=) and a tool that fetches a page's text. For each question, search, read the three best sources, and answer with a short brief and numbered citations. Add a second tool that saves the brief as a page in my Notion database 'Research' when I ask it to.",
+      "match": [
+        "research|web search|search",
+        "agent|researcher"
+      ]
+    },
+    {
+      "id": "calendar-agent",
+      "group": "ai",
+      "title": "Chat with your calendar",
+      "summary": "'Move my 3pm to Friday' and 'what is free next week' in plain language.",
+      "apps": [
+        "Google Calendar",
+        "OpenAI"
+      ],
+      "trigger": "Chat",
+      "level": "Medium",
+      "prompt": "Build a chat-triggered AI agent with Google Calendar tools to list, create, move and delete events on my primary calendar, with memory for the conversation. It must confirm with me before deleting or moving anything, and use my timezone.",
+      "match": [
+        "calendar"
+      ]
+    },
+    {
+      "id": "human-approval",
+      "group": "ai",
+      "title": "Agent that asks before it acts",
+      "summary": "The agent prepares the action; a person approves it in Gmail or Telegram first.",
+      "apps": [
+        "Gmail",
+        "Telegram",
+        "OpenAI"
+      ],
+      "trigger": "Chat",
+      "level": "Advanced",
+      "prompt": "Build an AI agent that can send emails through Gmail, but only after approval: before each send, it sends me the draft on Telegram with Approve and Reject buttons and waits for my answer. On Reject, it asks me what to change. Log every decision to a Google Sheet called 'Approvals'.",
+      "match": [
+        "human|approv|hitl"
+      ]
+    },
+    {
+      "id": "morning-brief",
+      "group": "personal",
+      "title": "Morning brief on Telegram",
+      "summary": "Today's calendar, weather and the three emails that matter, before coffee.",
+      "apps": [
+        "Google Calendar",
+        "Gmail",
+        "Telegram"
+      ],
+      "trigger": "Schedule",
+      "level": "Quick",
+      "prompt": "Every day at 07:00, get today's Google Calendar events, the weather for my city from a free weather API, and my unread Gmail from the last 12 hours. Ask an AI model to write a short brief with the day's plan, anything to prepare, and the three emails worth reading first, and send it to me on Telegram.",
+      "match": [
+        "morning|brief|daily .*(email|digest|summar)"
+      ]
+    },
+    {
+      "id": "receipts",
+      "group": "personal",
+      "title": "Expenses from receipt photos",
+      "summary": "Send a photo to a bot; get a categorized row in your expenses sheet.",
+      "apps": [
+        "Telegram",
+        "OpenAI",
+        "Google Sheets"
+      ],
+      "trigger": "App event",
+      "level": "Medium",
+      "prompt": "When I send a photo to my Telegram bot, use an AI vision model to read the merchant, date, total and currency from the receipt, choose a category from my list (groceries, travel, software, eating out, other), append it to a Google Sheet called 'Expenses', and reply with what was saved so I can correct it.",
+      "match": [
+        "receipt|expense"
+      ]
+    },
+    {
+      "id": "reading-list",
+      "group": "personal",
+      "title": "Reading list with summaries",
+      "summary": "Send a link, get it saved with a summary and tags, ready when you have time.",
+      "apps": [
+        "Telegram",
+        "Notion",
+        "Anthropic"
+      ],
+      "trigger": "App event",
+      "level": "Quick",
+      "prompt": "When I send a URL to my Telegram bot, fetch the page, ask Claude for a three-sentence summary, an estimated reading time and up to three tags, and add it to my Notion database 'Reading list' with status 'To read'. Reply with the title and summary.",
+      "match": [
+        "bookmark|reading list|read later"
+      ]
+    }
+  ]
+}

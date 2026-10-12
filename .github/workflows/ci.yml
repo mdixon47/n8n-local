@@ -41,12 +41,15 @@ jobs:
         shell: bash
         run: shellcheck n8nctl.sh test/smoke.sh test/stubs/curl test/stubs/docker
 
-      - name: Preload, network check and gallery parse
+      - name: Preload, network check, gallery and ideas page parse
         shell: bash
         run: |
           # n8n will not start if runtime/force-http1.cjs fails to load.
           node --check runtime/force-http1.cjs
           node --check test/netcheck.js
+          node --check templates-api/web/app.js
+          node --check templates-api/web/editor-hook.js
+          python3 -I -B -c 'import json, sys; json.load(open(sys.argv[1], encoding="utf-8"))' templates-api/web/ideas.json
           python3 -I -B -c 'import ast, sys; [ast.parse(open(f, encoding="utf-8").read(), f) for f in sys.argv[1:]]' \
             templates-api/server.py templates-api/build.py
 

@@ -762,6 +762,26 @@ To return to n8n.io's library: delete `N8N_TEMPLATES_HOST` from `.env`,
 remove the `templates-api` service from `compose.override.yml`, and run
 `./n8nctl.sh start`.
 
+**The ideas page.** One link that `N8N_TEMPLATES_HOST` does not change is
+the Assistant's **See all**, under its suggestions; it always goes to
+n8n.io. Here it opens `http://Maliks-Mac-Studio.local:5690/` instead: ideas
+with ready prompts, and the same templates with filters, diagrams and
+warnings for nodes this n8n lacks. n8n has a setting,
+`EXTERNAL_FRONTEND_HOOKS_URLS`, that adds scripts to the editor page; it
+loads `templates-api/web/editor-hook.js` from the gallery service, and that
+script rewrites the link.
+
+```
+Assistant "See all" ──► editor-hook.js ──► ideas page :5690
+ideas page "Send to the Assistant" ──► :5678/assistant ──► prompt typed in, not sent
+```
+
+Check it: `curl -s http://localhost:5678/ | grep editor-hook` shows the
+`<script>` tag. If the link still goes to n8n.io, reload the editor tab
+with Cmd+Shift+R. To add or change ideas, edit `templates-api/web/ideas.json`
+and reload the page; `match` holds patterns that pick related templates by
+name, apps and node names.
+
 ## 21. How the wrapper works inside
 
 Reading order for [n8nctl.sh](../n8nctl.sh), top to bottom:
