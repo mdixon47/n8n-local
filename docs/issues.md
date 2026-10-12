@@ -107,21 +107,22 @@ or a phone hotspot to find which link is at fault. As a workaround that
 does not fix the cause, set **Retry On Fail** on the LinkedIn node
 (Settings tab: 3 tries, about 5 s apart).
 
+On 2026-10-12 TSO was turned off on this Mac (until the next reboot);
+the check has not been run since.
+
 **Done when:** this check reports `0 failed` from the Mac and from the
 container on several days, and the LinkedIn node stops failing:
 
 ```bash
-cat > /tmp/bigpost.js <<'JS'
-const https=require("https");const N=15,sz=2*1024*1024;
-(async()=>{for(const h of ["api.linkedin.com","api.github.com"]){let f=0;for(let i=0;i<N;i++){await new Promise(r=>{const q=https.request({host:h,path:"/x",method:"POST",timeout:30000,agent:false,headers:{"content-length":sz}},s=>{s.resume();s.on("end",r)});q.on("error",()=>{f++;r()});q.on("timeout",()=>q.destroy(new Error("t")));q.end(Buffer.alloc(sz,97))})}console.log(h,`2MB x${N}: ${f} failed`)}})()
-JS
-node /tmp/bigpost.js
-docker exec -i n8n-n8n-1 node - < /tmp/bigpost.js
+node test/netcheck.js
+docker exec -i n8n-n8n-1 node - < test/netcheck.js
 ```
 
-The script sends 2 MB of the letter `a` with no credentials; servers answer
-401 or 404, which counts as a pass. Only a dropped connection counts as a
-failure.
+[test/netcheck.js](../test/netcheck.js) sends 2 MB of the letter `a` with
+no credentials, 15 times to each host; servers answer 401 or 404, which
+counts as a pass. Only a dropped connection counts as a failure, and the
+script exits 1 if there was one. Arguments change the count and hosts:
+`node test/netcheck.js 30 api.anthropic.com`.
 
 ## 4. Wrapper's module list is stale
 
@@ -286,7 +287,8 @@ changes.
   only public templates; never tag a private workflow.
 - **The browser sends n8n's cookies to the gallery.** Both share the host
   name, and the editor makes gallery requests with credentials. `server.py`
-  never reads or logs headers; keep it that way when changing it.
+  reads only `Origin` and `Host`, to decide whether to send CORS headers,
+  and never logs headers; keep it that way when changing it.
 - **`localhost` webhook and OAuth URLs** (learn.md 17). Connect OAuth
   credentials only from this Mac; replace `localhost` in webhook URLs when
   calling them from another machine.

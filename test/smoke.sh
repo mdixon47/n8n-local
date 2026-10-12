@@ -114,6 +114,11 @@ check       "restore -y"                             "$CTL" -y restore "$B1"
 check       "restore put data back"                  test "$(cat "$VOL/marker")" = "before"
 check       "restore made a safety backup"           bash -c "grep -q 'reason=pre-restore' '$N8N_BASE_DIR'/n8n-backups/*/manifest"
 check_fails "verify catches tampering"               bash -c "cp -R '$B1' '$WORK/tampered' && echo x >> '$WORK/tampered/n8n-data.tar.gz' && \"$CTL\" verify '$WORK/tampered'"
+echo "live" > "$VOL/marker"; nb="$(count_backups)"
+check_fails "restore refuses a damaged snapshot"     "$CTL" -y restore "$WORK/tampered"
+check       "damaged restore left data alone"        test "$(cat "$VOL/marker")" = "live"
+check       "damaged restore took no backup first"   test "$(count_backups)" -eq "$nb"
+check       "manifest records the helper image"      grep -q '^helper_image=alpine:3\.[0-9.]*@sha256:' "$B1/manifest"
 
 # --- export -------------------------------------------------------------------
 check       "export"                                 "$CTL" export
@@ -148,6 +153,28 @@ printf 'services:\n  n8n:\n    ports: !override\n      - "127.0.0.1:5678:5678"\n
 check       "upgrade with override, no backup"       "$CTL" -y upgrade --version 2.36.1 --skip-backup
 check       "override re-applied after upgrade"      grep -q 'compose.override.yml up -d' "$STUB_STATE/docker.calls"
 check       "override included in backup"            bash -c "\"$CTL\" backup && ls -d '$N8N_BASE_DIR'/n8n-backups/*/compose.override.yml"
+check       "upgrade never lets the installer start"  bash -c "\"$CTL\" -y upgrade --version 2.36.2 --skip-backup | grep -q 'Not restarting (--no-start)'"
+check       "upgrade pulls, then starts with override" bash -c "grep -q 'compose.override.yml pull' '$STUB_STATE/docker.calls'"
+check       "upgrade --no-start leaves it stopped"   bash -c "\"$CTL\" stop && \"$CTL\" -y upgrade --version 2.36.3 --skip-backup --no-start && [ ! -f '$STUB_STATE/running' ]"
+"$CTL" start >/dev/null
+
+# --- runtime checks (status / upgrade) ----------------------------------------
+printf 'services:\n  n8n:\n    environment:\n      NODE_OPTIONS: --require=/opt/n8n-local/force-http1.cjs\n' > "$N8N_BASE_DIR/n8n/compose.override.yml"
+printf '/opt/n8n-local\n' > "$STUB_STATE/mounts"
+check       "status: preload missing is flagged"     bash -c "\"$CTL\" status 2>&1 | grep -q 'Preload: no \[n8n-local\] line'"
+echo "[n8n-local] fetch uses HTTP/1.1 (undici 8.9.0 dispatcher)" > "$STUB_STATE/n8n.log"
+check       "status: preload confirmed"              bash -c "\"$CTL\" status | grep -q 'Preload: fetch uses HTTP/1.1'"
+check       "status: bind mounts readable"           bash -c "\"$CTL\" status | grep -q 'Bind mounts: all 1 readable'"
+printf '/opt/n8n-local\n' > "$STUB_STATE/dead"
+check       "status: dead bind mount flagged"        bash -c "\"$CTL\" status 2>&1 | grep -q 'bind mount /opt/n8n-local is not readable'"
+check       "upgrade reports a dead bind mount"      bash -c "\"$CTL\" -y upgrade --version 2.36.4 --skip-backup 2>&1 | grep -q 'checks above need attention'"
+rm -f "$STUB_STATE/dead"
+echo unhealthy > "$STUB_STATE/health"
+check       "status: failing health check flagged"   bash -c "\"$CTL\" status 2>&1 | grep -q 'health check: unhealthy'"
+rm -f "$STUB_STATE/health"
+check       "status: backup age shown"               bash -c "\"$CTL\" status | grep -qE 'Last backup: .*, [0-9]+h ago\)'"
+mkdir -p "$WORK/oldb/20200101-000000" && : > "$WORK/oldb/20200101-000000/n8n-data.tar.gz"
+check       "status: stale backup flagged"           bash -c "N8N_BACKUP_DIR='$WORK/oldb' \"$CTL\" status 2>&1 | grep -q 'nightly backup may have stopped'"
 
 # --- start / stop / logs / uninstall ------------------------------------------
 check       "stop"                                   "$CTL" stop

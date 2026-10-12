@@ -10,10 +10,16 @@ Standard library only. Reads data/catalog.json and data/workflows/<id>.json,
 reloading the catalog when build.py rewrites it. Read-only: GET and OPTIONS.
 
 Requests from the editor carry the browser's cookies (withCredentials), which
-include the n8n session cookie when both share a hostname. Nothing here reads,
-logs, or stores headers; the access log records method, path, and status only.
+include the n8n session cookie when both share a hostname. Nothing here logs
+or stores headers; the access log records method, path, and status only.
+
+Only the editor may read responses from a browser: CORS headers are sent for
+origins on the editor's port (TEMPLATES_EDITOR_PORT, default 5678) whose host
+is this machine, a .local name, or a private address. A page on any other site
+gets no CORS headers, so the browser keeps the response from it.
 """
 
+import ipaddress
 import json
 import os
 import sys
@@ -23,6 +29,7 @@ from urllib.parse import parse_qs, urlsplit
 DATA_DIR = os.environ.get("TEMPLATES_DATA_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"))
 PORT = int(os.environ.get("TEMPLATES_PORT", "8080"))
 CATALOG = os.path.join(DATA_DIR, "catalog.json")
+EDITOR_PORT = int(os.environ.get("TEMPLATES_EDITOR_PORT", "5678"))
 
 AUTHOR = {"id": 0, "name": "This n8n instance", "username": "local", "bio": "", "verified": False, "links": "[]", "avatar": ""}
 
@@ -135,15 +142,38 @@ def search(qs):
     return {"totalWorkflows": len(hits), "workflows": [listing(t) for t in chunk], "filters": []}
 
 
+def editor_origin(origin, host_header):
+    """True when `origin` can be the n8n editor on the home network."""
+    try:
+        o = urlsplit(origin)
+        port = o.port or (443 if o.scheme == "https" else 80)
+    except ValueError:
+        return False
+    if o.scheme not in ("http", "https") or not o.hostname or port != EDITOR_PORT:
+        return False
+    name = o.hostname.lower()
+    if name == "localhost" or name.endswith(".local"):
+        return True
+    if host_header and name == (urlsplit("//" + host_header).hostname or "").lower():
+        return True
+    try:
+        ip = ipaddress.ip_address(name)
+    except ValueError:
+        return False
+    return ip.is_loopback or ip.is_private or ip.is_link_local
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "n8n-local-templates/1"
 
     def cors(self):
+        self.send_header("Vary", "Origin")
         origin = self.headers.get("Origin")
-        if origin:
+        if origin and editor_origin(origin, self.headers.get("Host")):
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Access-Control-Allow-Credentials", "true")
-            self.send_header("Vary", "Origin")
+            return True
+        return False
 
     def send_json(self, status, body):
         payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
@@ -157,14 +187,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
         self.send_response(204)
-        self.cors()
-        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
-        requested = self.headers.get("Access-Control-Request-Headers")
-        if requested:
-            self.send_header("Access-Control-Allow-Headers", requested)
-        if self.headers.get("Access-Control-Request-Private-Network") == "true":
-            self.send_header("Access-Control-Allow-Private-Network", "true")
-        self.send_header("Access-Control-Max-Age", "600")
+        if self.cors():
+            self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+            requested = self.headers.get("Access-Control-Request-Headers")
+            if requested:
+                self.send_header("Access-Control-Allow-Headers", requested)
+            if self.headers.get("Access-Control-Request-Private-Network") == "true":
+                self.send_header("Access-Control-Allow-Private-Network", "true")
+            self.send_header("Access-Control-Max-Age", "600")
         self.send_header("Content-Length", "0")
         self.end_headers()
 

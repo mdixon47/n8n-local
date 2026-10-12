@@ -23,7 +23,16 @@ case "$1" in
         else mkdir -p "$(dirname "$C$out")"; printf '[{"name":"a"},{"name":"b"}]' > "$C$out"; fi
         exit 0 ;;
       rm) rm -rf "${C:?}$3"; exit 0 ;;
+      # a path listed in $STUB_STATE/dead behaves like a dead bind mount
+      ls) if grep -qxF "$2" "$STUB_STATE/dead" 2>/dev/null; then echo "ls: $2: Bad file descriptor" >&2; exit 1; fi; exit 0 ;;
     esac; echo "stub docker exec: unhandled $*" >&2; exit 1 ;;
+  inspect)
+    # docker inspect -f FORMAT <id>: bind mounts from $STUB_STATE/mounts, health from $STUB_STATE/health
+    case "$3" in
+      *.Mounts*) cat "$STUB_STATE/mounts" 2>/dev/null; exit 0 ;;
+      *.Health*) cat "$STUB_STATE/health" 2>/dev/null; exit 0 ;;
+      *.Name*) echo "/n8n-n8n-1"; exit 0 ;;
+    esac ;;
   cp)
     src="${2#*:}"; cp -R "$STUB_STATE/container$src" "$3"; exit 0 ;;
   run)
@@ -33,7 +42,7 @@ case "$1" in
       case "$1" in
         --rm) ;;
         -v) mounts+=("$2"); shift ;;
-        alpine:3) shift; cmd=("$@"); break ;;
+        alpine:*) shift; cmd=("$@"); break ;;
       esac; shift
     done
     data=""; backup=""
@@ -60,7 +69,7 @@ case "$1" in
             for a in "$@"; do [[ "$a" == "-q" ]] && { echo "abc123"; exit 0; }; done
             echo "NAME        STATUS"; echo "n8n-n8n-1   running"
           fi; exit 0 ;;
-      logs) echo "[stub] logs $*"; exit 0 ;;
+      logs) echo "[stub] logs $*"; cat "$STUB_STATE/n8n.log" 2>/dev/null; exit 0 ;;
     esac ;;
 esac
 echo "stub docker: unhandled: $*" >&2; exit 1

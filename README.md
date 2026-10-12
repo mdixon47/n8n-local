@@ -238,7 +238,7 @@ Agent Builder and republishing it.
 | --- | --- |
 | Check prerequisites | `./n8nctl.sh preflight` |
 | Fresh install (pinned) | `./n8nctl.sh install --version X.Y.Z` |
-| Health and config | `./n8nctl.sh status` |
+| Health and config | `./n8nctl.sh status` (also container health checks, bind mounts, the HTTP/1.1 preload, and backup age) |
 | Start / stop / follow logs | `./n8nctl.sh start` · `stop` · `logs [service]` |
 | Snapshot | `./n8nctl.sh backup` |
 | Export all workflows as JSON | `./n8nctl.sh export` |
@@ -279,14 +279,16 @@ and refuses to run without a terminal unless `-y` is given.
 helper container, restarts n8n and waits for it to be healthy, then copies
 `.env`, `compose.yml`, `compose.override.yml` (if present) and
 `searxng-settings.yml` next to the tarball with a `manifest` holding the
-version, volume name, reason and the tarball's sha256. Expect a few seconds
+version, volume name, reason, the tarball's sha256 and the pinned helper
+image. Expect a few seconds
 of downtime. Two snapshots in the same second get a `_2` suffix.
 
 `verify <dir>` checks that all files are present, `.env` is mode 600, the
 tarball hash matches the manifest, the n8n version agrees between manifest and
 `.env`, and `database.sqlite` is inside the archive.
 
-`restore <dir>` first snapshots the current state (skip with
+`restore <dir>` runs the same checks as `verify` and stops before touching
+anything if one fails. It then snapshots the current state (skip with
 `--no-safety-backup`), stops the stack, puts the config files back, lets
 compose recreate the volume, wipes and extracts the data, then starts and
 waits for health. Everything created after the snapshot is lost. The
@@ -365,8 +367,11 @@ To go back to n8n.io's gallery, remove `N8N_TEMPLATES_HOST` from `.env` and the
 ```
 
 The wrapper fetches and (if changed) offers to review the installer, takes a
-backup, runs the upstream `--upgrade`, re-applies `compose.override.yml`, and
-prints the rollback command. Downgrades are refused because database
+backup, runs the upstream `--upgrade --no-start` (which only updates `.env`),
+pulls the images, starts the stack with `compose.override.yml`, waits for
+health, checks bind mounts and the HTTP/1.1 preload, and prints the rollback
+command. The installer never starts n8n itself, so n8n never runs without the
+override. Downgrades are refused because database
 migrations are one-way; going back means `restore` from a snapshot taken at
 the older version. Without `--version` the latest release is looked up and
 confirmed before anything happens.
@@ -492,8 +497,8 @@ Mac and from containers alike, to every host tried, so the cause is the
 network path, not n8n or Docker. Restarting n8n does not help. Restart the
 router, change Wi-Fi band, or try another connection; meanwhile Retry On
 Fail on the affected node gets most runs through.
-[docs/issues.md](docs/issues.md) item 3 has the details and a check
-script.
+[docs/issues.md](docs/issues.md) item 3 has the details;
+`node test/netcheck.js` checks whether it is happening now.
 
 **`Bad file descriptor` inside a container, gallery answers 500, or n8n
 will not start with `Cannot find module '/opt/n8n-local/force-http1.cjs'`.**

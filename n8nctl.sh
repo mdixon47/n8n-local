@@ -17,11 +17,13 @@
 # Usage: ./n8nctl.sh <command> [options]    (see ./n8nctl.sh help)
 set -euo pipefail
 
-N8NCTL_VERSION="1.4.0"
+N8NCTL_VERSION="1.5.0"
 INSTALLER_URL="https://get.n8n.io"
 RELEASES_URL="https://api.github.com/repos/n8n-io/n8n/releases/latest"
 N8N_PORT=5678
-HELPER_IMAGE="alpine:3"
+# Reads the data volume for backups and wipes it on restore, so pinned like
+# everything else; recorded in each backup's manifest.
+HELPER_IMAGE="alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6"
 
 N8N_BASE_DIR="${N8N_BASE_DIR:-$PWD}"
 N8N_DIR="$N8N_BASE_DIR/n8n"
@@ -129,6 +131,15 @@ file_mode() {
 
 dir_size() { du -sh "$1" 2>/dev/null | cut -f1; }
 
+# Seconds since the epoch for a snapshot name (YYYYMMDD-HHMMSS[_N], UTC), or
+# nothing if it cannot be parsed.
+snapshot_epoch() {
+  local s="${1%%_*}" iso
+  [[ "$s" =~ ^[0-9]{8}-[0-9]{6}$ ]] || return 0
+  iso="${s:0:4}-${s:4:2}-${s:6:2} ${s:9:2}:${s:11:2}:${s:13:2}"
+  date -j -u -f '%Y%m%d-%H%M%S' "$s" +%s 2>/dev/null || date -u -d "$iso" +%s 2>/dev/null || true
+}
+
 valid_version() { [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; }
 
 # version_lt A B -> 0 when A < B (numeric, per component)
@@ -210,6 +221,44 @@ wait_healthy() {
   done
   printf '\n'
   return 1
+}
+
+# Checks on the running stack: container health checks, bind mounts (they go
+# dead after a sleep when the project is on an external drive) and, when the
+# override preloads runtime/force-http1.cjs, its confirmation line in the n8n
+# log. Prints a line per finding; returns 1 if anything needs attention.
+check_runtime() {
+  local cid name health mounts m line bad=0 nmounts=0
+  while IFS= read -r cid; do
+    [[ -n "$cid" ]] || continue
+    name="$(docker inspect -f '{{.Name}}' "$cid" 2>/dev/null || true)"; name="${name#/}"
+    health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$cid" 2>/dev/null || true)"
+    case "$health" in
+      ""|healthy) ;;
+      starting) say "${name:-$cid} is still starting" ;;
+      *) warn "${name:-$cid} health check: $health"; bad=1 ;;
+    esac
+    mounts="$(docker inspect -f '{{range .Mounts}}{{if eq .Type "bind"}}{{println .Destination}}{{end}}{{end}}' "$cid" 2>/dev/null || true)"
+    while IFS= read -r m; do
+      [[ -n "$m" ]] || continue
+      nmounts=$((nmounts + 1))
+      if ! docker exec "$cid" ls "$m" >/dev/null 2>&1; then
+        warn "${name:-$cid}: bind mount $m is not readable; run './n8nctl.sh stop' then './n8nctl.sh start'"
+        bad=1
+      fi
+    done <<<"$mounts"
+  done < <(compose ps -q 2>/dev/null || true)
+  (( nmounts > 0 )) && (( ! bad )) && ok "Bind mounts: all $nmounts readable"
+
+  if grep -q 'force-http1' "$N8N_DIR/compose.override.yml" 2>/dev/null; then
+    line="$(compose logs --no-color --no-log-prefix n8n 2>/dev/null | grep '\[n8n-local\]' | tail -n1 || true)"
+    case "$line" in
+      *'fetch uses HTTP/1.1'*) ok "Preload: fetch uses HTTP/1.1" ;;
+      "") warn "Preload: no [n8n-local] line in the n8n log; is runtime/force-http1.cjs loaded?"; bad=1 ;;
+      *) warn "Preload: $line"; bad=1 ;;
+    esac
+  fi
+  return "$bad"
 }
 
 # Data volume: N8N_VOLUME overrides; otherwise the single volume named *n8n-data,
@@ -406,10 +455,11 @@ sandbox_version=${sandbox:-unknown}
 volume=$vol
 data_sha256=$hash
 n8nctl_version=$N8NCTL_VERSION
+helper_image=$HELPER_IMAGE
 EOF
   BACKUP_PATH="$dest"
   ok "Backup written to $dest ($(dir_size "$dest"))"
-  log "backup  path=$dest reason=$reason version=${ver:-unknown} volume=$vol data_sha256=$hash"
+  log "backup  path=$dest reason=$reason version=${ver:-unknown} volume=$vol data_sha256=$hash helper=$HELPER_IMAGE"
 }
 
 manifest_get() { sed -n "s/^$2=//p" "$1/manifest" 2>/dev/null | head -n1; }
@@ -458,9 +508,9 @@ cmd_preflight() {
   fi
 
   if gitignore_ok; then
-    ok ".gitignore covers n8n/, n8n-backups/, n8nctl.log"
+    ok ".gitignore covers n8n/, n8n-backups/, n8nctl.log, exports/"
   else
-    warn ".gitignore is missing entries (install fixes this; or add n8n/, n8n-backups/, n8nctl.log)"
+    warn ".gitignore is missing entries (install fixes this; or add n8n/, n8n-backups/, n8nctl.log, exports/)"
   fi
   say "Free space: $(df -h "$N8N_BASE_DIR" | awk 'NR==2{print $4}') on $(df -h "$N8N_BASE_DIR" | awk 'NR==2{print $1}')"
   warn "Port $N8N_PORT is published to all interfaces. On anything but a personal machine, put a firewall or a TLS reverse proxy in front."
@@ -562,17 +612,20 @@ cmd_upgrade() {
     warn "Skipping the pre-upgrade backup as requested."
   fi
 
-  args=(--upgrade --version "$target")
-  (( no_start )) && args+=(--no-start)
-  run_installer "${args[@]}"
-
-  # The upstream script starts with compose.yml only; re-apply the override.
-  if (( ! no_start )) && [[ -f "$N8N_DIR/compose.override.yml" ]]; then
-    say "Re-applying compose.override.yml ..."
-    compose up -d >/dev/null
-  fi
+  # The installer only updates .env here. Left to itself it would start the
+  # stack with compose.yml alone, briefly running n8n without the override.
+  run_installer --upgrade --version "$target" --no-start
   chmod 600 "$N8N_DIR/.env"
   log "upgrade  from=${current:-unset} to=$target backup=$backup_note no_start=$no_start"
+
+  if (( ! no_start )); then
+    say "Pulling images and starting n8n $target ..."
+    compose pull ||
+      die "pulling images failed; n8n/.env now says $target but the old containers are still running. Retry with './n8nctl.sh start'$([[ "$backup_note" != "skipped" ]] && echo ", or roll back with './n8nctl.sh restore $backup_note'")"
+    compose up -d >/dev/null
+    wait_healthy 180 || warn "n8n did not report healthy in time; check './n8nctl.sh logs n8n'"
+    check_runtime || warn "n8n $target is running, but the checks above need attention"
+  fi
   ok "Upgraded n8n ${current:-?} -> $target"
   [[ "$backup_note" != "skipped" ]] && say "Rollback: ./n8nctl.sh restore $backup_note"
   return 0
@@ -737,7 +790,7 @@ cmd_modules() {
 }
 
 cmd_status() {
-  local ver sandbox mode vol last keys p mods
+  local ver sandbox mode vol last keys p mods taken age
   say "${C_BOLD}n8nctl $N8NCTL_VERSION${C_RESET}  base: $N8N_BASE_DIR"
   if ! is_installed; then
     say "Install:    none (run './n8nctl.sh install --version X.Y.Z')"
@@ -771,7 +824,7 @@ cmd_status() {
   fi
   env_is_set DAYTONA_API_KEY && say "Daytona:    key on file (DAYTONA_API_KEY)"
   [[ -f "$N8N_DIR/compose.override.yml" ]] && say "Override:   compose.override.yml present"
-  gitignore_ok || warn ".gitignore is missing n8n/, n8n-backups/ or n8nctl.log"
+  gitignore_ok || warn ".gitignore is missing n8n/, n8n-backups/, n8nctl.log or exports/"
 
   if docker info >/dev/null 2>&1; then
     if vol="$(detect_volume 2>/dev/null)"; then say "Volume:     $vol"; else say "Volume:     not created yet"; fi
@@ -783,13 +836,20 @@ cmd_status() {
     else
       warn "Not answering on http://localhost:$N8N_PORT/healthz"
     fi
+    n8n_running && { check_runtime || true; }
   else
     warn "Docker daemon not reachable; container state unknown"
   fi
 
   last="$(list_backups | tail -n1)"
   if [[ -n "$last" ]]; then
-    say "Last backup: $last (n8n $(manifest_get "$last" n8n_version))"
+    taken="$(snapshot_epoch "$(basename "$last")")"
+    age=""
+    [[ -n "$taken" ]] && age=$(( ($(date -u +%s) - taken) / 3600 ))
+    say "Last backup: $last (n8n $(manifest_get "$last" n8n_version)${age:+, ${age}h ago})"
+    if [[ -n "$age" ]] && (( age >= 26 )); then
+      warn "The newest snapshot is $age hours old; the nightly backup may have stopped (see docs/backup-plan.md)"
+    fi
   else
     say "Last backup: none"
   fi
@@ -924,13 +984,11 @@ cmd_backups() {
   ok "Pruned ${#doomed[@]} snapshot(s)"
 }
 
-cmd_verify() {
-  local src="" fails=0 want got mode entries ver env_ver f
-  [[ $# -eq 1 ]] || die "usage: verify <backup-dir>"
-  src="$1"
-  [[ -d "$src" ]] || die "not a directory: $src"
-  src="$(cd "$src" && pwd)"
-  say "${C_BOLD}Verifying $src${C_RESET}"
+# Checks a snapshot directory: files, .env mode, tarball sha256 against the
+# manifest, versions, and a readable tarball holding database.sqlite.
+# Prints a line per check; returns 1 if any failed.
+verify_snapshot() {
+  local src="$1" fails=0 want got mode entries ver env_ver f
 
   for f in n8n-data.tar.gz .env compose.yml manifest; do
     if [[ -f "$src/$f" ]]; then ok "$f present"; else warn "$f missing"; fails=1; fi
@@ -972,7 +1030,17 @@ cmd_verify() {
     fi
   fi
 
-  (( fails )) && die "verification FAILED for $src"
+  return "$fails"
+}
+
+cmd_verify() {
+  local src
+  [[ $# -eq 1 ]] || die "usage: verify <backup-dir>"
+  src="$1"
+  [[ -d "$src" ]] || die "not a directory: $src"
+  src="$(cd "$src" && pwd)"
+  say "${C_BOLD}Verifying $src${C_RESET}"
+  verify_snapshot "$src" || die "verification FAILED for $src"
   ok "Snapshot looks good"
 }
 
@@ -991,8 +1059,11 @@ cmd_restore() {
   src="$(cd "$src" && pwd)"
   [[ -f "$src/n8n-data.tar.gz" ]] || die "$src has no n8n-data.tar.gz"
   [[ -f "$src/.env" ]] || die "$src has no .env (the encryption key must travel with the data)"
-  [[ -f "$src/compose.yml" ]] || warn "$src has no compose.yml; the current one is kept"
   check_docker
+  # Check the snapshot before the plan: a damaged tarball must be found while
+  # the live data is still in place.
+  say "Checking $src ..."
+  verify_snapshot "$src" || die "$src failed verification (see above); nothing was changed"
 
   ver="$(manifest_get "$src" n8n_version)"
   say ""
