@@ -105,10 +105,15 @@
   };
   const STICKY = 'n8n-nodes-base.stickyNote';
   let localTypes = {};
+  let customMap = {}; // CUSTOM.<name> -> installed community type the server maps it to
 
   // --- text -------------------------------------------------------------------
+  // n8n.io descriptions carry some HTML entities (e.g. "-&gt;"). Decoded into text, never parsed as HTML.
+  const ENTITIES = { '&gt;': '>', '&lt;': '<', '&quot;': '"', '&#39;': "'", '&apos;': "'", '&nbsp;': ' ', '&amp;': '&' };
+  function decode(text) { return String(text || '').replace(/&(?:gt|lt|quot|#39|apos|nbsp|amp);/g, (e) => ENTITIES[e]); }
+
   function plain(md) {
-    return (md || '')
+    return decode(md)
       .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
       .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
       .replace(/<[^>]+>/g, ' ')
@@ -145,7 +150,7 @@
       if (list) box.append(list);
       list = null;
     };
-    for (const raw of (md || '').replace(/\r/g, '').split('\n')) {
+    for (const raw of decode(md).replace(/\r/g, '').split('\n')) {
       const line = raw.trim().replace(/<[^>]+>/g, '');
       if (!line || /^!\[[^\]]*\]\([^)]*\)$/.test(line) || /^[-=_*]{3,}$/.test(line)) { flush(); continue; }
       const h = /^#{1,6}\s+(.*)$/.exec(line);
@@ -560,9 +565,10 @@
     const xs = nodes.map((n) => n.position[0]);
     const ys = nodes.map((n) => n.position[1]);
     const pad = 40;
-    const minX = Math.min(...xs) - pad;
+    const padX = 80; // room for labels wider than a node at either end
+    const minX = Math.min(...xs) - padX;
     const minY = Math.min(...ys) - pad;
-    const width = Math.max(...xs) - minX + W + pad;
+    const width = Math.max(...xs) - minX + W + padX;
     const height = Math.max(...ys) - minY + H + 34 + pad;
 
     const edges = svg('g');
@@ -712,9 +718,7 @@
         el('span', { class: 'tag', text: `${t.nodeCount} nodes` }),
         t.ai ? el('span', { class: 'tag ai', text: 'AI' }) : null,
         t.apps.map((a) => el('span', { class: 'tag', text: a }))),
-      t.missingNodes.length ? el('div', { class: 'notice' },
-        el('strong', { text: 'Some nodes will not run here. ' }),
-        t.missingNodes.map((n) => MISSING_HELP[n] || `${n} comes from a community package that is not installed (Settings, Community nodes)`).join('. ') + '.') : null,
+      t.missingNodes.length ? missingNotice(t.missingNodes, (type) => type.split('.').pop()) : null,
       el('div', { class: 'actions' },
         el('a', { class: 'btn primary', href: links.template(t.id), target: '_blank', rel: 'noopener', text: 'Use this template' }),
         el('button', { class: 'btn', type: 'button', text: 'Adapt with the Assistant', onclick: adapt }),
@@ -747,13 +751,38 @@
     return `${n} view${n === 1 ? '' : 's'}`;
   }
 
+  function resolveType(type) { return customMap[type] || type; }
+
   function isMissing(type) {
-    return type !== STICKY && Object.keys(localTypes).length > 0 && !localTypes[type];
+    return type !== STICKY && Object.keys(localTypes).length > 0 && !localTypes[resolveType(type)];
+  }
+
+  // What to do about one node type this n8n lacks, as a list item with a link.
+  function missingHelp(type, name) {
+    if (MISSING_HELP[type]) return el('li', { text: `${MISSING_HELP[type]}.` });
+    if (type.startsWith('CUSTOM.')) {
+      const short = type.slice('CUSTOM.'.length);
+      return el('li', {}, el('strong', { text: name }),
+        ` was a custom node on the author's machine. Find its community package on `,
+        el('a', { href: `https://www.npmjs.com/search?q=${encodeURIComponent(`keywords:n8n-community-node-package ${short}`)}`, target: '_blank', rel: 'noopener noreferrer', text: 'npm' }),
+        ', install it under Settings → Community nodes, run ', el('code', { text: 'python3 -I templates-api/build.py' }),
+        ', then import again: the node is then mapped to the installed one.');
+    }
+    const pkg = type.slice(0, type.lastIndexOf('.'));
+    return el('li', {}, el('strong', { text: name }), ': install the community package ',
+      el('a', { href: `https://www.npmjs.com/package/${pkg}`, target: '_blank', rel: 'noopener noreferrer' }, el('code', { text: pkg })),
+      ' under Settings → Community nodes, then run ', el('code', { text: 'python3 -I templates-api/build.py' }), '.');
+  }
+
+  function missingNotice(types, nameOf) {
+    return el('div', { class: 'notice' },
+      el('strong', { text: 'Not on this n8n. ' }), 'The template imports, but these nodes stay unrecognized and the workflow will not run until they are installed:',
+      el('ul', { class: 'help-list' }, types.map((t) => missingHelp(t, nameOf(t)))));
   }
 
   // An n8n.io node, with this n8n's icon when it has one (n8n.io's own as a fallback).
   function remoteNode(n) {
-    const local = localTypes[n.name] || {};
+    const local = localTypes[resolveType(n.name)] || {};
     const out = {
       name: n.name, displayName: n.displayName || local.displayName || String(n.name).split('.').pop(),
       icon: local.icon || n.icon, iconPath: local.iconPath, iconPathDark: local.iconPathDark,
@@ -866,7 +895,30 @@
         const author = w.user && (w.user.name || w.user.username);
         const created = w.createdAt ? new Date(w.createdAt) : null;
         const paid = (w.price || 0) > 0 || !!w.purchaseUrl;
-        const missingNames = missing.map((t) => nodes.find((n) => n.name === t).displayName);
+        // Unknown node types have no display name on n8n.io: use the node's name in the workflow.
+        const nameOf = (t) => {
+          const up = upstreamNodes.get(t);
+          if (up && up.displayName) return up.displayName;
+          const inWf = (wf.nodes || []).find((n) => n.type === t);
+          return inWf ? inWf.name : t.split('.').pop();
+        };
+        const actions = el('div', { class: 'actions' });
+        const importLink = () => el('a', { class: 'btn primary', href: links.importTemplate(id), target: '_blank', rel: 'noopener', text: missing.length ? 'Import anyway' : 'Import into n8n' });
+        const fillActions = () => actions.replaceChildren(...[
+          paid ? null : (missing.length
+            ? el('button', { class: 'btn primary', type: 'button', text: 'Import into n8n…', onclick: confirmImport })
+            : importLink()),
+          paid ? null : el('a', { class: 'btn', href: links.template(id), target: '_blank', rel: 'noopener', text: 'Preview in n8n' }),
+          el('a', { class: 'btn', href: `https://n8n.io/workflows/${id}`, target: '_blank', rel: 'noopener noreferrer', text: 'View on n8n.io' }),
+          paid ? null : el('button', { class: 'btn', type: 'button', text: 'Copy workflow JSON', onclick: copyJson }),
+        ].filter(Boolean));
+        // A template with missing nodes imports, then fails with "Unrecognized node type": say so first.
+        function confirmImport() {
+          actions.replaceChildren(el('div', { class: 'confirm' },
+            el('p', {}, el('strong', { text: `${missing.length} node type${missing.length > 1 ? 's are' : ' is'} not installed. ` }),
+              'Install them first (see above) and the workflow runs as it is. Imported now, it opens with those nodes unrecognized.'),
+            el('div', { class: 'actions' }, importLink(), el('button', { class: 'btn', type: 'button', text: 'Cancel', onclick: fillActions }))));
+        }
 
         const copyJson = () => {
           fetch(`api/workflows/templates/${id}`).then((r) => r.json())
@@ -875,6 +927,7 @@
               () => toast('Could not load the workflow.'));
         };
 
+        fillActions();
         const diagramBox = el('div', { class: 'diagram-wrap' });
         diagramBox.append(diagram(wf, shape) || el('p', { class: 'empty', text: 'No nodes to draw.' }));
         $('#detail-eyebrow').textContent = ['n8n.io library', ...cats].join(' · ');
@@ -886,13 +939,8 @@
             author ? el('span', { class: 'tag', text: `by ${author}` }) : null,
             created && !isNaN(created) ? el('span', { class: 'tag', text: created.toLocaleDateString() }) : null),
           paid ? el('div', { class: 'notice' }, el('strong', { text: 'Paid template. ' }), 'Buy it on n8n.io; it cannot be imported from here.') : null,
-          missing.length ? el('div', { class: 'notice' }, el('strong', { text: 'Not on this n8n: ' }),
-            `${missingNames.join(', ')}. The template imports, but those nodes will not run until you install them (Settings, Community nodes) or replace them.`) : null,
-          el('div', { class: 'actions' },
-            paid ? null : el('a', { class: 'btn primary', href: links.importTemplate(id), target: '_blank', rel: 'noopener', text: 'Import into n8n' }),
-            paid ? null : el('a', { class: 'btn', href: links.template(id), target: '_blank', rel: 'noopener', text: 'Preview in n8n' }),
-            el('a', { class: 'btn', href: `https://n8n.io/workflows/${id}`, target: '_blank', rel: 'noopener noreferrer', text: 'View on n8n.io' }),
-            paid ? null : el('button', { class: 'btn', type: 'button', text: 'Copy workflow JSON', onclick: copyJson })),
+          missing.length ? missingNotice(missing, nameOf) : null,
+          actions,
           el('p', { class: 'hint', text: 'Written by the n8n community. Import creates a new, inactive workflow; read its Code and HTTP Request nodes before you run it.' }),
           diagramBox,
           el('div', {}, el('h3', { class: 'label', text: 'About' }), w.description ? markdown(w.description) : el('p', { class: 'empty', text: 'No description.' })),
@@ -996,6 +1044,7 @@
     catalog = cat;
     ideaData = ideas;
     localTypes = nodeTypes.types || {};
+    customMap = nodeTypes.customMap || {};
     prepare();
     start();
   }).catch((err) => {

@@ -22,6 +22,7 @@ When an item is done, delete it here and mention it in the commit message.
 | 8 | Templates not imported, or imported with missing nodes | Optional | varies |
 | 9 | Housekeeping: duplicates, old exports, backup pruning | Later | 10 min |
 | 10 | Accepted risks to re-check | Review | none |
+| 11 | Two n8n.io imports need community nodes (`CUSTOM.scrapeNinja`, Blotato) | Before running them | 15 min |
 
 ## 1. About 705 emails passed over without labels
 
@@ -310,3 +311,59 @@ changes.
 - **Owner account reset** (learn.md 18). The reset on 2026-10-09 removed
   the old account's settings and any MFA. If MFA was in use, turn it back on
   under Settings, Personal.
+
+## 11. Two n8n.io imports need community nodes
+
+**Status:** open, waiting for the packages to be installed.
+
+**What:** two templates imported from the n8n.io library on 2026-10-13
+(00:07 and 00:09 UTC) use nodes this n8n does not have. Running the first
+fails with `Problem running workflow. Unrecognized node type:
+CUSTOM.scrapeNinja`.
+
+| Workflow | ID | Nodes it lacks |
+| --- | --- | --- |
+| Scrape any web page into structured JSON data with ScrapeNinja and AI (n8n.io 2812) | `aKElXQarE96OY3Ch` | 3 x `CUSTOM.scrapeNinja` |
+| Generate AI viral videos with NanoBanana & VEO3, shared on socials via Blotato | `hJLR8b5GhnKP7V3F` | 10 x `@blotato/n8n-nodes-blotato.blotato` |
+
+`CUSTOM.<name>` is the type n8n gives nodes loaded from a local custom-nodes
+folder, so the template's author had ScrapeNinja installed by hand. The npm
+package `n8n-nodes-scrapeninja` (0.4.1, last release 2025-02-06) has the
+same node, `scrapeNinja` version 1, with every operation the template uses
+(`scrape`, `cleanup-html`, `extract-custom`), but installed it is called
+`n8n-nodes-scrapeninja.scrapeNinja`. Installing the package is not enough;
+the three nodes also need the new type. Blotato's nodes already carry their
+package name, so installing that package is all they need.
+
+Both packages are third-party code that runs inside n8n. ScrapeNinja bundles
+jsdom, cheerio, `@n8n/vm2` (to run the generated extraction code) and
+pg-promise.
+
+**Fix, ScrapeNinja:**
+
+1. Settings, Community nodes, Install: `n8n-nodes-scrapeninja`.
+2. `./n8nctl.sh backup` as an undo point.
+3. Give the three nodes the installed type and re-import the workflow under
+   its own ID:
+
+   ```bash
+   docker exec -u node n8n-n8n-1 n8n export:workflow --id=aKElXQarE96OY3Ch --output=/tmp/scrape.json
+   docker exec -u node n8n-n8n-1 sed -i 's/"CUSTOM\.scrapeNinja"/"n8n-nodes-scrapeninja.scrapeNinja"/g' /tmp/scrape.json
+   docker exec -u node n8n-n8n-1 n8n import:workflow --input=/tmp/scrape.json
+   docker exec -u node n8n-n8n-1 rm /tmp/scrape.json
+   ```
+
+4. `python3 -I templates-api/build.py`, so the gallery knows the package:
+   from then on, n8n.io templates using `CUSTOM.scrapeNinja` are imported
+   with the installed type (README, "Ideas page").
+5. Add a ScrapeNinja API credential and a Google Gemini credential to the
+   nodes that ask for them.
+
+**Fix, Blotato:** install `@blotato/n8n-nodes-blotato` the same way and run
+`build.py`, or delete the workflow if it is not wanted.
+
+**Done when:** both workflows open without unrecognized nodes, a manual run
+of the ScrapeNinja one gets past the scrape step, and
+`curl -s http://Maliks-Mac-Studio.local:5690/api/local/node-types | grep -o '"customMap":{[^}]*}'`
+lists `CUSTOM.scrapeNinja`. Item 8 covers older templates with missing
+nodes.

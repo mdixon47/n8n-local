@@ -239,10 +239,16 @@ dialog::backdrop { background: rgba(10, 12, 18, .5); }
 .icon-btn:hover { background: var(--surface-2); }
 .icon-btn svg { width: 22px; height: 22px; stroke: var(--muted); stroke-width: 2; fill: none; }
 .detail-body { overflow: auto; padding: 18px 22px 24px; display: flex; flex-direction: column; gap: 18px; }
+.detail-body > * { flex-shrink: 0; }
 .actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .meta-row { display: flex; gap: 6px; flex-wrap: wrap; }
 .detail .label { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--faint); margin-bottom: 8px; }
 .notice { background: var(--warn-soft); color: var(--warn); border-radius: var(--radius-sm); padding: 10px 12px; font-size: 14px; }
+.notice a { color: inherit; }
+.help-list { margin: 6px 0 0; padding-left: 20px; }
+.help-list li { margin: 3px 0; }
+.confirm { width: 100%; background: var(--warn-soft); border-radius: var(--radius-sm); padding: 12px; color: var(--warn); }
+.confirm p { margin: 0 0 10px; font-size: 14px; }
 .prompt-box {
   width: 100%; min-height: 150px; resize: vertical; border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
   padding: 12px; background: var(--surface-2); line-height: 1.5;

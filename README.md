@@ -397,6 +397,14 @@ hours. Searches on the n8n.io tab are sent to n8n.io. Set
 Templates from n8n.io are written by its community: read Code and HTTP
 Request nodes before running one.
 
+**Missing nodes.** The template dialog names the npm package to install for
+each node this n8n lacks, and **Import into n8n…** asks first when one is
+missing. Some n8n.io templates use `CUSTOM.<name>`, a node the author loaded
+by hand; once a community package with a node called `<name>` is installed
+and `build.py` has run, the gallery server hands those templates over with
+the installed type, so they import ready to run. After installing any
+community package, run `python3 -I templates-api/build.py`.
+
 How the link is redirected: `EXTERNAL_FRONTEND_HOOKS_URLS` in
 `n8n/compose.override.yml` makes n8n add `templates-api/web/editor-hook.js`
 to the editor page. The script rewrites links to `n8n.io/workflows`, and

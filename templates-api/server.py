@@ -20,6 +20,12 @@ local one is fetched from n8n.io for /templates/workflows/<id> and
 no browser headers (no cookies), go only to that one host, and are cached in
 memory for 4 hours.
 
+n8n.io templates sometimes use CUSTOM.<name>: a node the author loaded from
+a local folder, which no other n8n has. When exactly one installed community
+node type ends in .<name> (data/node-types.json, written by build.py),
+templates are handed over with that type instead, so they import ready to
+run. Rebuild with build.py after installing a community package.
+
 Standard library only. Reads data/catalog.json and data/workflows/<id>.json,
 reloading the catalog when build.py rewrites it. Read-only: GET and OPTIONS.
 
@@ -131,6 +137,55 @@ def detail(t, wf, cats):
         "categories": category_refs(t, cats),
         "image": [],
     }
+
+
+_types_cache = {"mtime": None, "types": {}}
+
+
+def node_types():
+    """Node types this n8n has, from build.py; reloaded when the file changes."""
+    try:
+        mtime = os.stat(NODE_TYPES).st_mtime
+    except FileNotFoundError:
+        return {}
+    if mtime != _types_cache["mtime"]:
+        with open(NODE_TYPES, encoding="utf-8") as fh:
+            _types_cache.update(mtime=mtime, types=json.load(fh).get("types", {}))
+    return _types_cache["types"]
+
+
+def custom_map():
+    """CUSTOM.<name> -> the one installed community type ending in .<name>, when there is exactly one.
+
+    n8n's own nodes are never targets: a custom node that shares a built-in
+    node's name is a different node."""
+    by_name = {}
+    for t in node_types():
+        if not t.startswith(("CUSTOM.", "n8n-nodes-base.", "@n8n/")):
+            by_name.setdefault(t.rsplit(".", 1)[-1], []).append(t)
+    return {f"CUSTOM.{name}": hits[0] for name, hits in by_name.items() if len(hits) == 1}
+
+
+def map_custom_nodes(data):
+    """Copy of an upstream template answer with CUSTOM.* node types mapped (see custom_map)."""
+    mapping = custom_map()
+    raw = json.dumps(data)
+    if "CUSTOM." not in raw or not mapping:
+        return data
+    data = json.loads(raw)  # never change the cached object
+    def fix_nodes(nodes, key):
+        for n in nodes or []:
+            if isinstance(n, dict) and n.get(key) in mapping:
+                n[key] = mapping[n[key]]
+    root = data.get("workflow") if isinstance(data.get("workflow"), dict) else {}
+    fix_nodes(root.get("nodes"), "type")                                   # /workflows/templates/<id>
+    inner = root.get("workflow") if isinstance(root.get("workflow"), dict) else {}
+    fix_nodes(inner.get("nodes"), "type")                                  # /templates/workflows/<id>
+    fix_nodes(root.get("nodes"), "name")                                   # its node list
+    info = (root.get("workflowInfo") or {}).get("nodeTypes")
+    if isinstance(info, dict):
+        root["workflowInfo"]["nodeTypes"] = {mapping.get(k, k): v for k, v in info.items()}
+    return data
 
 
 _upstream_cache = {}
@@ -364,11 +419,7 @@ class Handler(BaseHTTPRequestHandler):
         if segs == ["local", "node-types"]:
             # Node types this n8n has, written by build.py: lets the page flag
             # n8n.io templates that need a node that is not installed here.
-            try:
-                with open(NODE_TYPES, encoding="utf-8") as fh:
-                    return self.send_json(200, json.load(fh))
-            except FileNotFoundError:
-                return self.send_json(200, {"types": {}})
+            return self.send_json(200, {"types": node_types(), "customMap": custom_map()})
         if segs[:1] == ["n8nio"]:
             try:
                 if segs == ["n8nio", "search"]:
@@ -392,7 +443,7 @@ class Handler(BaseHTTPRequestHandler):
                 # Not one of ours: hand over n8n.io's answer as it is, so the
                 # editor's detail page and import route work for its library.
                 try:
-                    return self.send_json(200, upstream(f"/{segs[0]}/{segs[1]}/{tid}"))
+                    return self.send_json(200, map_custom_nodes(upstream(f"/{segs[0]}/{segs[1]}/{tid}")))
                 except UpstreamError as exc:
                     return self.send_json(404, {"message": f"Template not found ({exc})"})
             if segs[0] == "templates":
