@@ -11,6 +11,15 @@ node icons build.py copied into data/icons/, and web/editor-hook.js, which
 n8n loads into the editor (EXTERNAL_FRONTEND_HOOKS_URLS) so that links to
 n8n.io/workflows open the ideas page instead.
 
+n8n.io's public library is passed through too (TEMPLATES_UPSTREAM, default
+https://api.n8n.io/api; empty turns it off): /api/n8nio/search and
+/api/n8nio/categories for the ideas page, and a template id that is not a
+local one is fetched from n8n.io for /templates/workflows/<id> and
+/workflows/templates/<id>. That is what lets the editor's own import route,
+/workflows/templates/<id>, import any n8n.io template. Upstream requests carry
+no browser headers (no cookies), go only to that one host, and are cached in
+memory for 4 hours.
+
 Standard library only. Reads data/catalog.json and data/workflows/<id>.json,
 reloading the catalog when build.py rewrites it. Read-only: GET and OPTIONS.
 
@@ -28,8 +37,12 @@ import ipaddress
 import json
 import os
 import sys
+import threading
+import time
+import urllib.error
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 DATA_DIR = os.environ.get("TEMPLATES_DATA_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"))
 PORT = int(os.environ.get("TEMPLATES_PORT", "8080"))
@@ -48,6 +61,10 @@ WEB_FILES = {
 PAGE_CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
             "connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 EDITOR_PORT = int(os.environ.get("TEMPLATES_EDITOR_PORT", "5678"))
+UPSTREAM = os.environ.get("TEMPLATES_UPSTREAM", "https://api.n8n.io/api").rstrip("/")
+UPSTREAM_TTL = 4 * 3600
+UPSTREAM_MAX_BYTES = 8 * 1024 * 1024
+NODE_TYPES = os.path.join(DATA_DIR, "node-types.json")
 
 AUTHOR = {"id": 0, "name": "This n8n instance", "username": "local", "bio": "", "verified": False, "links": "[]", "avatar": ""}
 
@@ -114,6 +131,75 @@ def detail(t, wf, cats):
         "categories": category_refs(t, cats),
         "image": [],
     }
+
+
+_upstream_cache = {}
+_upstream_lock = threading.Lock()
+
+
+class UpstreamError(Exception):
+    pass
+
+
+def upstream(path, params=None):
+    """GET UPSTREAM + path as JSON, cached. Raises UpstreamError."""
+    if not UPSTREAM:
+        raise UpstreamError("n8n.io library is turned off (TEMPLATES_UPSTREAM is empty)")
+    url = UPSTREAM + path + (("?" + urlencode(params)) if params else "")
+    now = time.time()
+    with _upstream_lock:
+        hit = _upstream_cache.get(url)
+        if hit and now - hit[0] < UPSTREAM_TTL:
+            return hit[1]
+    req = urllib.request.Request(url, headers={"User-Agent": "n8n-local-templates/1", "Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            raw = r.read(UPSTREAM_MAX_BYTES + 1)
+    except urllib.error.HTTPError as exc:
+        raise UpstreamError(f"n8n.io answered HTTP {exc.code}") from None
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise UpstreamError(f"n8n.io is unreachable ({type(exc).__name__})") from None
+    if len(raw) > UPSTREAM_MAX_BYTES:
+        raise UpstreamError("n8n.io answer too large")
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        raise UpstreamError("n8n.io answer is not JSON") from None
+    with _upstream_lock:
+        if len(_upstream_cache) > 300:
+            for key in sorted(_upstream_cache, key=lambda k: _upstream_cache[k][0])[:100]:
+                del _upstream_cache[key]
+        _upstream_cache[url] = (now, data)
+    return data
+
+
+def upstream_search(qs):
+    """n8n.io search, trimmed to what the ideas page shows."""
+    def one(key, default="", limit=200):
+        return (qs.get(key, [default])[0] or default)[:limit]
+    params = {"page": one("page", "1", 4), "rows": one("rows", "24", 3), "search": one("q")}
+    if not (params["page"].isdigit() and params["rows"].isdigit() and 1 <= int(params["rows"]) <= 60):
+        raise ValueError("page must be a number and rows 1 to 60")
+    if one("category"):
+        params["category"] = one("category")
+    data = upstream("/templates/search", params)
+    out = []
+    for w in data.get("workflows") or []:
+        user = w.get("user") or {}
+        out.append({
+            "id": w.get("id"),
+            "name": w.get("name") or "",
+            "description": (w.get("description") or "")[:600],
+            "createdAt": w.get("createdAt") or "",
+            "totalViews": w.get("totalViews") or 0,
+            "price": w.get("price") or 0,
+            "purchaseUrl": w.get("purchaseUrl"),
+            "author": user.get("name") or user.get("username") or "",
+            "nodes": [{"name": n.get("name"), "displayName": n.get("displayName"), "icon": n.get("icon"),
+                       "iconData": n.get("iconData")} for n in (w.get("nodes") or [])],
+        })
+    filters = {f.get("field_name"): f.get("counts") or [] for f in data.get("filters") or []}
+    return {"total": data.get("totalWorkflows") or 0, "workflows": out, "categories": filters.get("categories", [])}
 
 
 def multi(qs, key):
@@ -275,6 +361,25 @@ class Handler(BaseHTTPRequestHandler):
         if segs == ["local", "catalog"]:
             # The whole catalog, for the ideas page (it filters in the browser).
             return self.send_json(200, cat)
+        if segs == ["local", "node-types"]:
+            # Node types this n8n has, written by build.py: lets the page flag
+            # n8n.io templates that need a node that is not installed here.
+            try:
+                with open(NODE_TYPES, encoding="utf-8") as fh:
+                    return self.send_json(200, json.load(fh))
+            except FileNotFoundError:
+                return self.send_json(200, {"types": {}})
+        if segs[:1] == ["n8nio"]:
+            try:
+                if segs == ["n8nio", "search"]:
+                    return self.send_json(200, upstream_search(qs))
+                if segs == ["n8nio", "categories"]:
+                    return self.send_json(200, upstream("/templates/categories"))
+            except UpstreamError as exc:
+                return self.send_json(502, {"message": str(exc)})
+            except ValueError as exc:
+                return self.send_json(400, {"message": str(exc)})
+            return self.send_json(404, {"message": "Not found"})
         if segs == ["templates", "collections"]:
             return self.send_json(200, {"collections": []})
         if segs == ["templates", "search"]:
@@ -284,7 +389,12 @@ class Handler(BaseHTTPRequestHandler):
             t = by_id.get(tid)
             wf = load_workflow(tid) if t else None
             if not wf:
-                return self.send_json(404, {"message": "Template not found"})
+                # Not one of ours: hand over n8n.io's answer as it is, so the
+                # editor's detail page and import route work for its library.
+                try:
+                    return self.send_json(200, upstream(f"/{segs[0]}/{segs[1]}/{tid}"))
+                except UpstreamError as exc:
+                    return self.send_json(404, {"message": f"Template not found ({exc})"})
             if segs[0] == "templates":
                 return self.send_json(200, {"workflow": detail(t, wf, cat["categories"])})
             return self.send_json(200, {"id": t["id"], "name": t["name"], "workflow": wf})

@@ -782,6 +782,22 @@ with Cmd+Shift+R. To add or change ideas, edit `templates-api/web/ideas.json`
 and reload the page; `match` holds patterns that pick related templates by
 name, apps and node names.
 
+**Importing from n8n.io.** On the ideas page, switch the templates to
+**n8n.io library**, search, open one and click **Import into n8n**; or
+paste an `n8n.io/workflows/<id>-...` link into the search box. The editor
+opens `/workflows/templates/<id>` and asks the templates host for that id.
+The host is the gallery server, which does not have it, so it fetches it from
+`api.n8n.io` and hands it over unchanged:
+
+```
+Import into n8n ──► :5678/workflows/templates/<id> ──► :5690 ──► api.n8n.io
+```
+
+The workflow arrives as a new, inactive workflow, with the author's
+credential slots empty. Connect your own credentials, read any Code and
+HTTP Request nodes, then activate it. Check the pass-through:
+`curl -s http://Maliks-Mac-Studio.local:5690/api/workflows/templates/15369 | head -c 200`.
+
 ## 21. How the wrapper works inside
 
 Reading order for [n8nctl.sh](../n8nctl.sh), top to bottom:

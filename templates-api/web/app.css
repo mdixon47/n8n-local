@@ -127,6 +127,8 @@ select {
   .chip[aria-selected="true"], .chip[aria-pressed="true"] { color: #0d1020; }
 }
 .chip .n { opacity: .7; margin-left: 4px; font-size: 12px; }
+.chips.source { margin: 0 auto 0 12px; }
+.section-head .chips.source .chip { padding: 4px 12px; }
 .group-blurb { color: var(--muted); margin: 8px 0 14px; min-height: 1.5em; font-size: 14px; }
 
 /* --- cards -------------------------------------------------------------- */

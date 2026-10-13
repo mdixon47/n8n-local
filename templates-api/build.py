@@ -15,7 +15,8 @@ what the ideas page (templates-api/web/) filters on: trigger kinds, the apps
 used, the apps that need a credential, an AI flag, and node types this n8n
 does not have (disabled, removed, or from an uninstalled community package). Node
 icons are copied into data/icons/, because n8n serves its own only to
-signed-in users.
+signed-in users. data/node-types.json lists every node type this n8n has,
+with its icon, so the page can do the same for n8n.io templates.
 
 Each template is cleaned before it is served, because the gallery answers
 without a login: credentials, pinned data, static data, webhook ids and
@@ -320,8 +321,22 @@ def main():
         with open(os.path.join(stage, "workflows", f"{tid}.json"), "w", encoding="utf-8") as fh:
             json.dump(cleaned, fh, ensure_ascii=False)
     templates.sort(key=lambda t: t["name"].lower())
-    wanted = {p for t in templates for n in t["nodes"] for p in icon_paths(n.get("iconUrl"))}
+    # Icons for every node type, not only the ones used here: n8n.io templates use others.
+    wanted = {p for m in meta.values() for p in icon_paths(m.get("iconUrl"))}
     copied = copy_icons(wanted, os.path.join(stage, "icons"))
+    types = {}
+    for name, m in meta.items():
+        url = m.get("iconUrl")
+        light = url.get("light") if isinstance(url, dict) else url
+        dark = url.get("dark") if isinstance(url, dict) else None
+        types[name] = {k: v for k, v in {
+            "displayName": m["displayName"],
+            "icon": m.get("icon"),
+            "iconPath": light if light in copied else None,
+            "iconPathDark": dark if dark in copied else None,
+        }.items() if v}
+    with open(os.path.join(stage, "node-types.json"), "w", encoding="utf-8") as fh:
+        json.dump({"types": types}, fh, ensure_ascii=False)
     for t in templates:
         for n in t["nodes"]:
             url = n.get("iconUrl")
@@ -342,6 +357,7 @@ def main():
             shutil.rmtree(old)
         if os.path.isdir(os.path.join(stage, sub_dir)):
             os.replace(os.path.join(stage, sub_dir), old)
+    os.replace(os.path.join(stage, "node-types.json"), os.path.join(OUT, "node-types.json"))
     os.replace(os.path.join(stage, "catalog.json"), os.path.join(OUT, "catalog.json"))
     shutil.rmtree(stage, ignore_errors=True)
     for dp, dirs, files in os.walk(OUT):

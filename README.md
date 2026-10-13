@@ -378,6 +378,24 @@ library:
 - Per template: **Use this template** (the in-app setup), **Adapt with the
   Assistant**, **Open the original**, **Copy workflow JSON** (paste onto a
   canvas). Filters and the open item are kept in the URL.
+- **n8n.io library**: the **n8n.io library** switch above the templates
+  searches n8n.io's public library (about 13,000 templates) by text and
+  category. A template's **Import into n8n** opens the editor's own import
+  route, `/workflows/templates/<id>`, which creates a new, inactive workflow.
+  Pasting an `n8n.io/workflows/...` link into the search box opens that
+  template, and so does clicking such a link inside the editor. Each one is
+  flagged when it needs a node this n8n does not have; paid templates link
+  to n8n.io instead.
+
+How n8n.io imports work: the gallery server passes n8n.io's API through
+(`TEMPLATES_UPSTREAM` in `n8n/compose.override.yml`, default
+`https://api.n8n.io/api`). Any template id that is not a local one is
+fetched from n8n.io, so the editor's import and preview pages work for the
+whole library. Upstream calls carry no browser headers and are cached for 4
+hours. Searches on the n8n.io tab are sent to n8n.io. Set
+`TEMPLATES_UPSTREAM: ''` and run `./n8nctl.sh start` to turn it off.
+Templates from n8n.io are written by its community: read Code and HTTP
+Request nodes before running one.
 
 How the link is redirected: `EXTERNAL_FRONTEND_HOOKS_URLS` in
 `n8n/compose.override.yml` makes n8n add `templates-api/web/editor-hook.js`

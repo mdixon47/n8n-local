@@ -3,7 +3,8 @@
 //
 // 1. Links to n8n.io/workflows (the Assistant's "See all" under its
 //    suggestions, the AI panel's template link) open this instance's ideas
-//    page instead, served by templates-api next to this file.
+//    page instead, served by templates-api next to this file. A link to one
+//    n8n.io template opens it there, ready to import.
 // 2. When the ideas page sends a prompt to the Assistant, it opens
 //    /assistant#n8n-local-prompt=<text>. This script drops the fragment
 //    straight away and, only if the tab was opened from the ideas page, types
@@ -31,12 +32,19 @@
   }
 
   // n8n.io/workflows/categories/<topic>/ -> ?topic=<topic>
+  // n8n.io/workflows/<id>-<slug>/        -> that template from the n8n.io library
   function ideasUrl(href) {
     var target = new URL(GALLERY + '/');
     target.searchParams.set('editor', location.origin);
     try {
-      var m = /^\/workflows\/categories\/([a-z0-9-]+)/.exec(new URL(href).pathname);
+      var path = new URL(href).pathname;
+      var m = /^\/workflows\/categories\/([a-z0-9-]+)/.exec(path);
+      var one = /^\/workflows\/(\d+)/.exec(path);
       if (m) target.searchParams.set('topic', m[1]);
+      if (one) {
+        target.searchParams.set('source', 'n8nio');
+        target.searchParams.set('n8nio', one[1]);
+      }
     } catch (e) { /* keep the plain page */ }
     return target.href;
   }

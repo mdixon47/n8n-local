@@ -25,7 +25,7 @@
       <label class="search">
         <span class="visually-hidden">Search ideas and templates</span>
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-        <input id="q" type="search" autocomplete="off" spellcheck="false" placeholder="Search ideas and templates, e.g. gmail label, telegram bot, invoice">
+        <input id="q" type="search" autocomplete="off" spellcheck="false" placeholder="Search ideas and templates, or paste an n8n.io/workflows link">
         <kbd aria-hidden="true">/</kbd>
       </label>
     </div>
@@ -46,6 +46,10 @@
     <section id="templates" aria-labelledby="tpl-h">
       <div class="section-head">
         <h2 id="tpl-h">Templates <span class="count" id="tpl-count"></span></h2>
+        <div class="chips source" id="source" role="tablist" aria-label="Where templates come from">
+          <button class="chip" type="button" role="tab" data-source="local">This n8n</button>
+          <button class="chip" type="button" role="tab" data-source="n8nio">n8n.io library</button>
+        </div>
         <div class="tools">
           <button class="filter-toggle" id="filter-toggle" type="button" aria-expanded="false" aria-controls="filters">Filters</button>
           <label class="sort">Sort

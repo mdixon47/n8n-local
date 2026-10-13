@@ -2,7 +2,10 @@
 //
 // Data: api/local/catalog (built by build.py from workflows tagged
 // `template`), api/workflows/templates/<id> for one workflow's nodes, and
-// ideas.json. Every piece of template text is put on the page as text, never
+// ideas.json. The n8n.io library comes through the same server
+// (api/n8nio/search, api/templates/workflows/<id>), which fetches it from
+// api.n8n.io; importing opens the editor's own route
+// /workflows/templates/<id>, which reads the template from that server too. Every piece of template text is put on the page as text, never
 // as HTML: templates come from imported workflows.
 //
 // Links go to the n8n editor: the origin passed as ?editor= by
@@ -64,6 +67,7 @@
   const links = {
     assistant: (prompt) => `${EDITOR}/assistant` + (prompt ? `#n8n-local-prompt=${encodeURIComponent(prompt)}` : ''),
     template: (id) => `${EDITOR}/templates/${id}`,
+    importTemplate: (id) => `${EDITOR}/workflows/templates/${id}`,
     workflow: (id) => `${EDITOR}/workflow/${encodeURIComponent(id)}`,
   };
 
@@ -97,8 +101,10 @@
 
   const state = {
     q: '', group: 'all', cat: null, trig: null, apps: [], size: null, ai: false, runs: false,
-    sort: 'relevance', ideasAll: false, tplLimit: 24, appsAll: false,
+    sort: 'relevance', ideasAll: false, tplLimit: 24, appsAll: false, source: 'local',
   };
+  const STICKY = 'n8n-nodes-base.stickyNote';
+  let localTypes = {};
 
   // --- text -------------------------------------------------------------------
   function plain(md) {
@@ -424,7 +430,22 @@
     }
   }
 
+  function renderSource() {
+    for (const b of document.querySelectorAll('#source .chip')) b.setAttribute('aria-selected', String(b.dataset.source === state.source));
+    $('#sort').parentElement.hidden = state.source !== 'local';
+  }
+
   function renderTemplates() {
+    renderSource();
+    $('#ask').hidden = false;
+    $('#ask-text').textContent = state.q
+      ? `Describe “${state.q}” to the Assistant and it builds the workflow for you.`
+      : 'Describe what you want to automate and the Assistant builds the workflow for you.';
+    if (state.source === 'n8nio') {
+      if (remote.key !== remoteKey()) fetchRemote(false);
+      else renderRemote();
+      return;
+    }
     const base = searched();
     renderFilters(base);
     renderActive();
@@ -446,11 +467,6 @@
     more.textContent = `Show ${Math.min(24, list.length - state.tplLimit)} more (${list.length - state.tplLimit} left)`;
     $('#tpl-count').textContent = list.length === catalog.templates.length ? String(list.length) : `${list.length} of ${catalog.templates.length}`;
 
-    const ask = $('#ask');
-    ask.hidden = false;
-    $('#ask-text').textContent = state.q
-      ? `Describe “${state.q}” to the Assistant and it builds the workflow for you.`
-      : 'Describe what you want to automate and the Assistant builds the workflow for you.';
   }
 
   // --- URL state --------------------------------------------------------------
@@ -468,7 +484,10 @@
     state.ai = p.get('ai') === '1';
     state.runs = p.get('runs') === '1';
     state.sort = ['relevance', 'name', 'newest', 'simplest'].includes(p.get('sort')) ? p.get('sort') : 'relevance';
-    return { template: p.get('template'), idea: p.get('idea') };
+    state.source = p.get('source') === 'n8nio' ? 'n8nio' : 'local';
+    remote.category = p.get('ncat') || null;
+    const n8nio = /^\d{1,9}$/.test(p.get('n8nio') || '') ? p.get('n8nio') : null;
+    return { template: p.get('template'), idea: p.get('idea'), n8nio };
   }
 
   function writeUrl(open) {
@@ -482,6 +501,9 @@
     if (state.ai) p.set('ai', '1');
     if (state.runs) p.set('runs', '1');
     if (state.sort !== 'relevance') p.set('sort', state.sort);
+    if (state.source !== 'local') p.set('source', state.source);
+    if (state.source === 'n8nio' && remote.category) p.set('ncat', remote.category);
+    if (open && open.n8nio) p.set('n8nio', String(open.n8nio));
     if (open && open.template) p.set('template', String(open.template));
     if (open && open.idea) p.set('idea', open.idea);
     const qs = p.toString();
@@ -714,6 +736,175 @@
     }, () => diagramBox.replaceChildren(el('p', { class: 'empty', text: 'The diagram could not be loaded.' })));
   }
 
+  // --- n8n.io library -------------------------------------------------------------
+  const remote = { key: null, list: [], page: 0, total: null, loading: false, error: '', categories: [], category: null };
+
+  function remoteKey() { return `${state.q}|${remote.category || ''}`; }
+
+  function views(n) {
+    if (n >= 10000) return `${Math.round(n / 1000)}k views`;
+    if (n >= 1000) return `${(n / 1000).toFixed(1)}k views`;
+    return `${n} view${n === 1 ? '' : 's'}`;
+  }
+
+  function isMissing(type) {
+    return type !== STICKY && Object.keys(localTypes).length > 0 && !localTypes[type];
+  }
+
+  // An n8n.io node, with this n8n's icon when it has one (n8n.io's own as a fallback).
+  function remoteNode(n) {
+    const local = localTypes[n.name] || {};
+    const out = {
+      name: n.name, displayName: n.displayName || local.displayName || String(n.name).split('.').pop(),
+      icon: local.icon || n.icon, iconPath: local.iconPath, iconPathDark: local.iconPathDark,
+    };
+    const data = n.iconData && n.iconData.type === 'file' ? String(n.iconData.fileBuffer || '') : '';
+    if (!out.iconPath && /^data:image\/(svg\+xml|png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(data)) out.iconPath = data;
+    return out;
+  }
+
+  function fetchRemote(more) {
+    const key = remoteKey();
+    if (!more) Object.assign(remote, { key, list: [], page: 0, total: null });
+    const page = remote.page + 1;
+    remote.loading = true;
+    remote.error = '';
+    renderRemote();
+    const p = new URLSearchParams({ q: state.q, page: String(page), rows: '24' });
+    if (remote.category) p.set('category', remote.category);
+    fetch(`api/n8nio/search?${p}`)
+      .then((r) => r.json().then((d) => (r.ok ? d : Promise.reject(new Error(d.message || `HTTP ${r.status}`)))))
+      .then((d) => {
+        if (remote.key !== key) return; // a newer search has started
+        remote.list = remote.list.concat(d.workflows || []);
+        remote.total = d.total || 0;
+        remote.page = page;
+        if (!remote.category) remote.categories = d.categories || [];
+        remote.loading = false;
+        renderRemote();
+      }, (err) => {
+        if (remote.key !== key) return;
+        remote.loading = false;
+        remote.error = err.message;
+        renderRemote();
+      });
+  }
+
+  function remoteCard(w) {
+    const nodes = (w.nodes || []).map(remoteNode);
+    const missing = (w.nodes || []).some((n) => isMissing(n.name));
+    return el('button', { class: 'card', type: 'button', onclick: () => openRemote(String(w.id)) },
+      cardIcons({ nodes }, 6),
+      el('h3', { text: w.name }),
+      el('p', { class: 'snippet', text: plain(w.description).slice(0, 220) || 'No description.' }),
+      el('div', { class: 'card-foot' },
+        el('span', { class: 'tag', text: views(w.totalViews || 0) }),
+        w.author ? el('span', { class: 'tag', text: w.author }) : null,
+        w.price ? el('span', { class: 'tag warn', text: 'Paid' }) : null,
+        missing ? el('span', { class: 'tag warn', text: 'Needs a missing node' }) : null));
+  }
+
+  function renderRemote() {
+    const box = $('#filters');
+    const cats = remote.categories.slice().sort((a, b) => b.count - a.count);
+    if (remote.category && !cats.some((c) => c.value === remote.category)) cats.unshift({ value: remote.category, count: 0 });
+    const ul = el('ul', {}, cats.map((c) => {
+      const pressed = remote.category === c.value;
+      return el('li', {}, el('button', {
+        type: 'button', 'aria-pressed': String(pressed),
+        onclick: () => { remote.category = pressed ? null : c.value; update(); },
+      }, el('span', { text: c.value }), el('span', { class: 'n', text: c.count ? c.count.toLocaleString() : '' })));
+    }));
+    box.replaceChildren(
+      el('div', { class: 'facet' }, el('h3', { text: 'n8n.io category' }), ul),
+      el('p', { class: 'hint', text: 'From n8n.io’s public library, fetched through this machine. Searches here are sent to n8n.io.' }));
+    $('#active-filters').replaceChildren(...(remote.category ? [el('button', {
+      type: 'button', 'aria-label': `Remove filter ${remote.category}`,
+      onclick: () => { remote.category = null; update(); },
+    }, `${remote.category} ✕`)] : []));
+
+    const grid = $('#tpl-grid');
+    grid.replaceChildren(...remote.list.map(remoteCard));
+    if (remote.error) {
+      grid.append(el('div', { class: 'empty' }, `Could not reach the n8n.io library: ${remote.error}. `,
+        el('button', { class: 'btn', type: 'button', text: 'Try again', onclick: () => fetchRemote(remote.list.length > 0) })));
+    } else if (remote.loading && !remote.list.length) {
+      grid.append(el('p', { class: 'empty', text: 'Searching n8n.io…' }));
+    } else if (!remote.list.length) {
+      grid.append(el('p', { class: 'empty', text: 'No n8n.io templates match.' }));
+    }
+    const more = $('#tpl-more');
+    more.hidden = remote.loading || remote.error || remote.total === null || remote.list.length >= remote.total;
+    more.textContent = `Show more (${(remote.total - remote.list.length).toLocaleString()} left)`;
+    $('#tpl-count').textContent = remote.total === null ? '' : `${remote.total.toLocaleString()} on n8n.io`;
+  }
+
+  function stripForPaste(wf, name) {
+    const nodes = (wf.nodes || []).map((n) => {
+      const copyNode = { ...n };
+      delete copyNode.credentials; // the author's credentials mean nothing here
+      return copyNode;
+    });
+    return { name, nodes, connections: wf.connections || {}, settings: { executionOrder: 'v1' } };
+  }
+
+  function openRemote(id) {
+    showDialog('n8n.io library', 'Loading…', [el('p', { class: 'empty', text: 'Loading the template from n8n.io…' })], { n8nio: id });
+    fetch(`api/templates/workflows/${id}`)
+      .then((r) => r.json().then((d) => (r.ok ? d : Promise.reject(new Error(d.message || `HTTP ${r.status}`)))))
+      .then((d) => {
+        if (!openItem || openItem.n8nio !== id) return;
+        const w = d.workflow || {};
+        const wf = w.workflow || {};
+        const types = [...new Set((wf.nodes || []).map((n) => n.type))].filter((t) => t !== STICKY);
+        const upstreamNodes = new Map((w.nodes || []).map((n) => [n.name, n]));
+        const nodes = types.map((t) => remoteNode(upstreamNodes.get(t) || { name: t }));
+        const missing = types.filter(isMissing);
+        const shape = { name: w.name || `Template ${id}`, nodes, missingNodes: missing };
+        const count = (wf.nodes || []).filter((n) => n.type !== STICKY).length;
+        const cats = (w.categories || []).map((c) => c.name).filter(Boolean);
+        const author = w.user && (w.user.name || w.user.username);
+        const created = w.createdAt ? new Date(w.createdAt) : null;
+        const paid = (w.price || 0) > 0 || !!w.purchaseUrl;
+        const missingNames = missing.map((t) => nodes.find((n) => n.name === t).displayName);
+
+        const copyJson = () => {
+          fetch(`api/workflows/templates/${id}`).then((r) => r.json())
+            .then((x) => copy(JSON.stringify(stripForPaste(x.workflow || {}, shape.name), null, 2)))
+            .then((ok) => toast(ok ? 'Workflow JSON copied, without credentials. Paste it onto an empty canvas.' : 'Could not copy the workflow.'),
+              () => toast('Could not load the workflow.'));
+        };
+
+        const diagramBox = el('div', { class: 'diagram-wrap' });
+        diagramBox.append(diagram(wf, shape) || el('p', { class: 'empty', text: 'No nodes to draw.' }));
+        $('#detail-eyebrow').textContent = ['n8n.io library', ...cats].join(' · ');
+        $('#detail-title').textContent = shape.name;
+        $('#detail-body').replaceChildren(...[
+          el('div', { class: 'meta-row' },
+            el('span', { class: 'tag', text: `${count} nodes` }),
+            el('span', { class: 'tag', text: views(w.totalViews || 0) }),
+            author ? el('span', { class: 'tag', text: `by ${author}` }) : null,
+            created && !isNaN(created) ? el('span', { class: 'tag', text: created.toLocaleDateString() }) : null),
+          paid ? el('div', { class: 'notice' }, el('strong', { text: 'Paid template. ' }), 'Buy it on n8n.io; it cannot be imported from here.') : null,
+          missing.length ? el('div', { class: 'notice' }, el('strong', { text: 'Not on this n8n: ' }),
+            `${missingNames.join(', ')}. The template imports, but those nodes will not run until you install them (Settings, Community nodes) or replace them.`) : null,
+          el('div', { class: 'actions' },
+            paid ? null : el('a', { class: 'btn primary', href: links.importTemplate(id), target: '_blank', rel: 'noopener', text: 'Import into n8n' }),
+            paid ? null : el('a', { class: 'btn', href: links.template(id), target: '_blank', rel: 'noopener', text: 'Preview in n8n' }),
+            el('a', { class: 'btn', href: `https://n8n.io/workflows/${id}`, target: '_blank', rel: 'noopener noreferrer', text: 'View on n8n.io' }),
+            paid ? null : el('button', { class: 'btn', type: 'button', text: 'Copy workflow JSON', onclick: copyJson })),
+          el('p', { class: 'hint', text: 'Written by the n8n community. Import creates a new, inactive workflow; read its Code and HTTP Request nodes before you run it.' }),
+          diagramBox,
+          el('div', {}, el('h3', { class: 'label', text: 'About' }), w.description ? markdown(w.description) : el('p', { class: 'empty', text: 'No description.' })),
+        ].filter(Boolean));
+      }, (err) => {
+        if (!openItem || openItem.n8nio !== id) return;
+        $('#detail-title').textContent = `Template ${id}`;
+        $('#detail-body').replaceChildren(el('p', { class: 'empty', text: `Could not load it from n8n.io: ${err.message}.` }),
+          el('div', { class: 'actions' }, el('a', { class: 'btn', href: `https://n8n.io/workflows/${id}`, target: '_blank', rel: 'noopener noreferrer', text: 'View on n8n.io' })));
+      });
+  }
+
   // --- start --------------------------------------------------------------------
   function prepare() {
     for (const c of catalog.categories) catName.set(c.id, c.name);
@@ -753,9 +944,21 @@
 
     let timer = null;
     q.addEventListener('input', () => {
+      // A pasted n8n.io template link opens that template, ready to import.
+      const pasted = /n8n\.io\/workflows\/(\d+)/.exec(q.value);
+      if (pasted) {
+        q.value = '';
+        state.q = '';
+        update();
+        openRemote(pasted[1]);
+        return;
+      }
       clearTimeout(timer);
-      timer = setTimeout(() => { state.q = q.value.trim(); state.tplLimit = 24; update(); }, 120);
+      timer = setTimeout(() => { state.q = q.value.trim(); state.tplLimit = 24; update(); }, state.source === 'n8nio' ? 350 : 120);
     });
+    for (const b of document.querySelectorAll('#source .chip')) {
+      b.addEventListener('click', () => { state.source = b.dataset.source; state.tplLimit = 24; update(); });
+    }
     q.addEventListener('keydown', (e) => { if (e.key === 'Escape' && q.value) { q.value = ''; state.q = ''; update(); } });
     document.addEventListener('keydown', (e) => {
       const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
@@ -763,7 +966,10 @@
     });
     $('#sort').addEventListener('change', (e) => { state.sort = e.target.value; update(); });
     $('#ideas-more').addEventListener('click', () => { state.ideasAll = true; renderIdeas(); });
-    $('#tpl-more').addEventListener('click', () => { state.tplLimit += 24; renderTemplates(); });
+    $('#tpl-more').addEventListener('click', () => {
+      if (state.source === 'n8nio') fetchRemote(true);
+      else { state.tplLimit += 24; renderTemplates(); }
+    });
     $('#ask-btn').addEventListener('click', openAsk);
     const ft = $('#filter-toggle');
     ft.addEventListener('click', () => {
@@ -771,7 +977,9 @@
       ft.setAttribute('aria-expanded', String(openNow));
     });
 
-    if (open.template) {
+    if (open.n8nio) {
+      openRemote(open.n8nio);
+    } else if (open.template) {
       const t = catalog.templates.find((x) => String(x.id) === open.template);
       if (t) openTemplate(t);
     } else if (open.idea) {
@@ -783,9 +991,11 @@
   Promise.all([
     fetch('api/local/catalog').then((r) => (r.ok ? r.json() : Promise.reject(new Error(`catalog: HTTP ${r.status}`)))),
     fetch('ideas.json').then((r) => (r.ok ? r.json() : Promise.reject(new Error(`ideas: HTTP ${r.status}`)))),
-  ]).then(([cat, ideas]) => {
+    fetch('api/local/node-types').then((r) => (r.ok ? r.json() : { types: {} }), () => ({ types: {} })),
+  ]).then(([cat, ideas, nodeTypes]) => {
     catalog = cat;
     ideaData = ideas;
+    localTypes = nodeTypes.types || {};
     prepare();
     start();
   }).catch((err) => {

@@ -187,6 +187,9 @@ catch up on missed runs if they must not be skipped.
 **What:** the 157 templates were imported with one-off scripts that were not
 kept. A second import would mean redoing that by hand (learn.md section 19).
 
+Single n8n.io templates can now be imported from the ideas page
+(README, "Ideas page"); this item is about batches and files.
+
 **Fix:** add `./n8nctl.sh import <file|folder> [--tag NAME]` to the wrapper.
 It should clean each file (strip credentials, fresh `id` and `webhookId`,
 `active: false`, tags), skip deprecated node types and invalid JSON with a
@@ -296,6 +299,11 @@ changes.
   of n8n data. It types a prompt into the Assistant only when the tab was
   opened from the ideas page, and never sends it. Whoever can edit the repo
   can change what runs in the editor.
+- **The gallery server talks to n8n.io for any LAN client** (2026-10-12).
+  Searches on the n8n.io tab and every non-local template id go to
+  `api.n8n.io` (no browser headers, one host, 4-hour cache, 8 MB cap).
+  Imported n8n.io templates are community code: read before running.
+  `TEMPLATES_UPSTREAM: ''` in the override turns it off.
 - **`localhost` webhook and OAuth URLs** (learn.md 17). Connect OAuth
   credentials only from this Mac; replace `localhost` in webhook URLs when
   calling them from another machine.
