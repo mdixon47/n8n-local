@@ -18,7 +18,7 @@ The n8n AI Assistant (a.k.a. n8n Assistant, module name `instance-ai`) is enable
 ├── n8nctl.log           # append-only: installer hashes, installs, upgrades, backups
 ├── test/                # smoke.sh + stub docker/curl + vendored installer fixtures
 ├── examples/            # compose.override.yml template (binds n8n to 127.0.0.1)
-├── launchd/             # nightly backup LaunchAgent (23:00, keep 14) + n8nctl-backup.applescript, the app it opens; log in ~/Library/Logs
+├── launchd/             # nightly LaunchAgent (23:00) -> n8nctl-backup.applescript app -> nightly.sh: backup, keep 14, patch upgrade, update check; log in ~/Library/Logs
 ├── templates-api/       # local Templates gallery + ideas page: server.py, build.py, web/; data/ generated, gitignored
 ├── runtime/             # force-http1.cjs: preloaded into n8n (NODE_OPTIONS) so fetch uses HTTP/1.1; n8n will not start without it
 ├── n8n/                 # CREATED BY THE UPSTREAM INSTALLER - treat as generated
@@ -54,7 +54,9 @@ Always go through the wrapper rather than raw `curl | sh`:
 | Check a snapshot | `./n8nctl.sh verify n8n-backups/<timestamp>` |
 | Prune to newest N | `./n8nctl.sh backups --prune N` (deletes; confirm first) |
 | Roll back | `./n8nctl.sh restore n8n-backups/<timestamp>` |
+| Check for a newer n8n | `./n8nctl.sh check-update` (exit 3 if a stable update exists) |
 | Upgrade (backs up first) | `./n8nctl.sh upgrade --version X.Y.Z` |
+| Newest patch, unattended | `./n8nctl.sh -y upgrade --patch-only` (nightly job; same X.Y, a day old, known installer only; exit 4 if checks fail) |
 | Skip prompts | add `-y` / `--yes` |
 
 Raw upstream equivalents, for reference only:
@@ -105,6 +107,7 @@ Do not invent environment variable names, compose service names, or image tags. 
 **Destructive operations: ask the user first**
 - `./n8nctl.sh uninstall`, `./n8nctl.sh restore`, `docker compose down -v`, `docker volume rm`, and `rm -rf n8n` all destroy data. Never run them unprompted, and never pass `-y` to them on your own initiative.
 - Never upgrade with `--skip-backup` unless the user asks.
+- Patch upgrades happen on their own: the nightly job runs `upgrade --patch-only` (same X.Y only). Minor and major upgrades are the user's call; `upgrade` without `--version` refuses a new major version. n8n's stable channel is GitHub releases without `prerelease`, excluding the 1.x maintenance line; `release_list` in the wrapper reads it.
 - Downgrading means `restore` from a backup taken at the older version. Do not point a newer database at an older n8n image; migrations are one-way.
 
 **Backups**

@@ -17,9 +17,16 @@
 # Usage: ./n8nctl.sh <command> [options]    (see ./n8nctl.sh help)
 set -euo pipefail
 
-N8NCTL_VERSION="1.5.0"
+N8NCTL_VERSION="1.6.0"
 INSTALLER_URL="https://get.n8n.io"
-RELEASES_URL="https://api.github.com/repos/n8n-io/n8n/releases/latest"
+# Newest 100 releases. "latest" alone is not enough: n8n also publishes 1.x
+# maintenance releases, and betas are marked prerelease.
+RELEASES_URL="https://api.github.com/repos/n8n-io/n8n/releases?per_page=100"
+RELEASE_NOTES_URL="https://docs.n8n.io/release-notes/"
+UPDATE_CHECK_MAX_AGE_DAYS=8
+# upgrade --patch-only waits this long after a release, so a broken patch has
+# a day to be replaced by the next one.
+PATCH_SOAK_DAYS="${N8NCTL_PATCH_SOAK_DAYS:-1}"
 N8N_PORT=5678
 # Reads the data volume for backups and wipes it on restore, so pinned like
 # everything else; recorded in each backup's manifest.
@@ -70,6 +77,7 @@ provider_key_var() {
 }
 
 ASSUME_YES=0
+REQUIRE_KNOWN_INSTALLER=0   # set for unattended upgrades: a changed installer is refused, not run
 TMP_DIR=""
 INSTALLER=""
 BACKUP_PATH=""
@@ -154,11 +162,58 @@ version_lt() {
   return 1
 }
 
-# Latest stable n8n release tag from GitHub, or empty if unreachable.
+version_major() { printf '%s\n' "${1%%.*}"; }
+version_minor() { local rest="${1#*.}"; printf '%s\n' "${rest%%.*}"; }
+
+# One line per n8n release on GitHub: "<version> stable|beta <YYYY-MM-DD>".
+# Pseudo-tags such as "stable" and "beta" are skipped; empty when unreachable.
+release_list() {
+  curl -fsSL --max-time 15 "$RELEASES_URL" 2>/dev/null | awk '
+    /"tag_name": *"/ { tag = ""; if (match($0, /"n8n@[0-9]+\.[0-9]+\.[0-9]+"/)) tag = substr($0, RSTART + 5, RLENGTH - 6); next }
+    /"prerelease": *(true|false)/ { kind = ($0 ~ /true/) ? "beta" : "stable"; next }
+    /"published_at": *"/ {
+      if (tag != "" && match($0, /[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/)) print tag, kind, substr($0, RSTART, RLENGTH)
+      tag = ""
+    }'
+}
+
+# Highest version of one kind (stable|beta) in release_list output on stdin.
+latest_of() {
+  local kind="$1" best="" v k d
+  while read -r v k d; do
+    if [[ "$k" != "$kind" ]] || ! valid_version "$v"; then continue; fi
+    if [[ -z "$best" ]] || version_lt "$best" "$v"; then best="$v"; fi
+  done
+  printf '%s\n' "$best"
+}
+
+# UTC date N days ago, YYYY-MM-DD (BSD date, then GNU).
+days_ago() {
+  date -u -v-"$1"d +%Y-%m-%d 2>/dev/null || date -u -d "$1 days ago" +%Y-%m-%d
+}
+
+# Newest stable patch of the installed minor version (same X.Y, higher Z) that
+# is at least PATCH_SOAK_DAYS old. Empty when there is none; dies offline.
+newest_patch() {
+  local current="$1" list cutoff best="" v k d fresh=""
+  list="$(release_list)"
+  [[ -n "$list" ]] || die "could not read n8n releases from GitHub (offline or rate-limited); nothing changed"
+  cutoff="$(days_ago "$PATCH_SOAK_DAYS")"
+  while read -r v k d; do
+    if [[ "$k" != stable ]] || ! valid_version "$v"; then continue; fi
+    [[ "$(version_major "$v").$(version_minor "$v")" == "$(version_major "$current").$(version_minor "$current")" ]] || continue
+    version_lt "$current" "$v" || continue
+    if [[ "$d" > "$cutoff" ]]; then fresh="${fresh:+$fresh, }$v ($d)"; continue; fi
+    if [[ -z "$best" ]] || version_lt "$best" "$v"; then best="$v"; fi
+  done <<<"$list"
+  [[ -n "$fresh" ]] && say "Newer but less than $PATCH_SOAK_DAYS day(s) old, left for a later run: $fresh" >&2
+  printf '%s\n' "$best"
+}
+
+# Latest stable n8n release, or empty if GitHub is unreachable.
 resolve_latest_version() {
   local v
-  v="$(curl -fsSL --max-time 10 "$RELEASES_URL" 2>/dev/null |
-    sed -n 's/.*"tag_name": *"n8n@\([0-9][0-9.]*\)".*/\1/p' | head -n1)"
+  v="$(release_list | latest_of stable)"
   if valid_version "$v"; then printf '%s\n' "$v"; fi
 }
 
@@ -364,7 +419,9 @@ fetch_installer() {
   fi
 
   if (( changed )); then
-    if (( ASSUME_YES )); then
+    if (( REQUIRE_KNOWN_INSTALLER )); then
+      die "the installer is new or changed since it was last run; an unattended upgrade will not run it. Review it with './n8nctl.sh upgrade --version X.Y.Z' in a terminal."
+    elif (( ASSUME_YES )); then
       warn "Proceeding without review because -y/--yes was given."
     elif [[ -t 0 ]]; then
       if confirm "Review the installer before running it?"; then
@@ -571,13 +628,14 @@ cmd_install() {
 }
 
 cmd_upgrade() {
-  local requested="" skip_backup=0 no_start=0 current target args=() backup_note="skipped"
+  local requested="" skip_backup=0 no_start=0 patch_only=0 checks_ok=1 current target backup_note="skipped"
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --version) [[ $# -ge 2 ]] || die "--version needs a value"; requested="$2"; shift ;;
       --version=*) requested="${1#*=}" ;;
       --skip-backup) skip_backup=1 ;;
       --no-start) no_start=1 ;;
+      --patch-only) patch_only=1 ;;
       *) die "upgrade: unknown option '$1'" ;;
     esac
     shift
@@ -586,7 +644,22 @@ cmd_upgrade() {
   check_docker
 
   current="$(env_get N8N_VERSION)"
-  target="$(pick_version "$requested")"
+  if (( patch_only )); then
+    # Unattended mode (the nightly job): only X.Y.Z -> X.Y.newer, never a changed installer.
+    [[ -z "$requested" ]] || die "--patch-only picks the version itself; leave out --version"
+    valid_version "$current" || die "N8N_VERSION in $N8N_DIR/.env is '${current:-unset}', not X.Y.Z"
+    target="$(newest_patch "$current")"
+    if [[ -z "$target" ]]; then
+      ok "No patch upgrade to install: n8n $current is the newest patch of $(version_major "$current").$(version_minor "$current") old enough to install"
+      return 0
+    fi
+    REQUIRE_KNOWN_INSTALLER=1
+  else
+    target="$(pick_version "$requested")"
+  fi
+  if [[ -z "$requested" && -n "$current" ]] && [[ "$(version_major "$target")" != "$(version_major "$current")" ]]; then
+    die "the latest stable release, $target, is a new major version (installed: $current). Read the migration notes at $RELEASE_NOTES_URL, test it on a restored backup, then pass --version $target explicitly."
+  fi
   if [[ -n "$current" ]] && version_lt "$target" "$current"; then
     die "refusing to downgrade $current -> $target. Database migrations are one-way; use 'restore' with a backup taken at $target."
   fi
@@ -616,18 +689,19 @@ cmd_upgrade() {
   # stack with compose.yml alone, briefly running n8n without the override.
   run_installer --upgrade --version "$target" --no-start
   chmod 600 "$N8N_DIR/.env"
-  log "upgrade  from=${current:-unset} to=$target backup=$backup_note no_start=$no_start"
+  log "upgrade  from=${current:-unset} to=$target backup=$backup_note no_start=$no_start patch_only=$patch_only"
 
   if (( ! no_start )); then
     say "Pulling images and starting n8n $target ..."
     compose pull ||
       die "pulling images failed; n8n/.env now says $target but the old containers are still running. Retry with './n8nctl.sh start'$([[ "$backup_note" != "skipped" ]] && echo ", or roll back with './n8nctl.sh restore $backup_note'")"
     compose up -d >/dev/null
-    wait_healthy 180 || warn "n8n did not report healthy in time; check './n8nctl.sh logs n8n'"
-    check_runtime || warn "n8n $target is running, but the checks above need attention"
+    wait_healthy 180 || { warn "n8n did not report healthy in time; check './n8nctl.sh logs n8n'"; checks_ok=0; }
+    check_runtime || { warn "n8n $target is running, but the checks above need attention"; checks_ok=0; }
   fi
   ok "Upgraded n8n ${current:-?} -> $target"
   [[ "$backup_note" != "skipped" ]] && say "Rollback: ./n8nctl.sh restore $backup_note"
+  (( checks_ok )) || { log "upgrade-checks  version=$target result=failed"; return 4; }
   return 0
 }
 
@@ -789,8 +863,60 @@ cmd_modules() {
   fi
 }
 
+# Compares the installed n8n with GitHub's releases and says what to do.
+# Exit status: 0 up to date (or ahead, on a beta), 3 a stable update exists.
+cmd_check_update() {
+  local current list stable beta stable_date level v k d newer=()
+  [[ $# -eq 0 ]] || die "check-update takes no arguments"
+  require_install
+  current="$(env_get N8N_VERSION)"
+  valid_version "$current" || die "N8N_VERSION in $N8N_DIR/.env is '${current:-unset}', not X.Y.Z"
+  list="$(release_list)"
+  stable="$(latest_of stable <<<"$list")"
+  [[ -n "$stable" ]] || die "could not read n8n releases from GitHub (offline or rate-limited); try again later"
+  beta="$(latest_of beta <<<"$list")"
+  stable_date="$(awk -v v="$stable" '$1 == v && $2 == "stable" { print $3; exit }' <<<"$list")"
+  while read -r v k d; do
+    [[ "$k" == stable ]] && valid_version "$v" && version_lt "$current" "$v" && newer+=("$v ($d)")
+  done <<<"$list"
+
+  if ! version_lt "$current" "$stable"; then
+    level="current"
+  elif [[ "$(version_major "$current")" != "$(version_major "$stable")" ]]; then
+    level="major"
+  elif [[ "$(version_minor "$current")" != "$(version_minor "$stable")" ]]; then
+    level="minor"
+  else
+    level="patch"
+  fi
+
+  say "Installed:      n8n $current"
+  say "Latest stable:  $stable${stable_date:+ ($stable_date)}"
+  if [[ -n "$beta" ]] && version_lt "$stable" "$beta"; then
+    say "Beta:           $beta (not for this install; it becomes stable after about a week)"
+  fi
+  case "$level" in
+    current)
+      if version_lt "$stable" "$current"; then ok "Ahead of stable ($current is a beta)"; else ok "Up to date"; fi ;;
+    patch)
+      warn "${#newer[@]} patch release(s) behind: ${newer[*]}"
+      say "Patch releases are bug and security fixes. Upgrade soon (a backup is taken first):"
+      say "  ./n8nctl.sh upgrade --version $stable" ;;
+    minor)
+      warn "A new minor version is out: $stable. Releases since $current: ${newer[*]}"
+      say "Read what changed first: $RELEASE_NOTES_URL"
+      say "Then: ./n8nctl.sh upgrade --version $stable" ;;
+    major)
+      warn "n8n $(version_major "$stable") is out ($stable); $current is on the previous major version."
+      say "Major versions remove features. Read the migration notes ($RELEASE_NOTES_URL),"
+      say "try it on a restored backup, and upgrade on purpose: ./n8nctl.sh upgrade --version $stable" ;;
+  esac
+  log "update-check  current=$current stable=$stable beta=${beta:-none} status=$level"
+  [[ "$level" == current ]] || return 3
+}
+
 cmd_status() {
-  local ver sandbox mode vol last keys p mods taken age
+  local ver sandbox mode vol last keys p mods taken age check checked stable days
   say "${C_BOLD}n8nctl $N8NCTL_VERSION${C_RESET}  base: $N8N_BASE_DIR"
   if ! is_installed; then
     say "Install:    none (run './n8nctl.sh install --version X.Y.Z')"
@@ -799,6 +925,25 @@ cmd_status() {
   ver="$(env_get N8N_VERSION)"; sandbox="$(env_get N8N_SANDBOX_VERSION)"
   say "Install:    $N8N_DIR"
   say "n8n:        ${ver:-unset}    sandbox service: ${sandbox:-unset}"
+  # Last check-update result from the log; no network call here.
+  check="$(grep '  update-check  ' "$LOG_FILE" 2>/dev/null | tail -n1 || true)"
+  if [[ -z "$check" ]]; then
+    say "Update:     not checked yet (./n8nctl.sh check-update)"
+  else
+    checked="${check:0:10}"
+    stable="$(sed -n 's/.* stable=\([0-9][0-9.]*\).*/\1/p' <<<"$check")"
+    days=""
+    taken="$(snapshot_epoch "$(tr -d '-' <<<"$checked")-000000")"
+    [[ -n "$taken" ]] && days=$(( ($(date -u +%s) - taken) / 86400 ))
+    if [[ -n "$ver" && -n "$stable" ]] && valid_version "$ver" && version_lt "$ver" "$stable"; then
+      warn "Update:     n8n $stable is available (checked $checked); see './n8nctl.sh check-update'"
+    else
+      say "Update:     up to date with stable ${stable:-?} (checked $checked)"
+    fi
+    if [[ -n "$days" ]] && (( days > UPDATE_CHECK_MAX_AGE_DAYS )); then
+      warn "Update:     last check was $days days ago; run './n8nctl.sh check-update'"
+    fi
+  fi
   mode="$(file_mode "$N8N_DIR/.env")"
   if [[ "$mode" == "600" ]]; then say ".env:       mode 600"; else warn ".env mode is $mode, expected 600 (chmod 600 n8n/.env)"; fi
   say "Model:      $(env_get "$MODEL_VAR" | grep . || echo "$DEFAULT_MODEL (n8n default)")"
@@ -1168,7 +1313,11 @@ Commands
   backups [--prune N]            List snapshots; --prune keeps only the newest N
   verify <dir>                   Check a snapshot: files, sha256, versions, tarball
   restore <dir>                  Roll back to a snapshot (takes a pre-restore backup first)
+  check-update                   Compare n8n with the latest stable release (exit 3 if behind)
   upgrade --version X.Y.Z        Backup, then upgrade. --skip-backup / --no-start available
+                                 Without --version: latest stable, but never a new major version
+  upgrade --patch-only           Unattended: newest patch of the installed X.Y, at least a day old;
+                                 refuses a changed installer. Exit 4 if the post-upgrade checks fail
   uninstall                      Remove containers, data and ./n8n (backup offered first)
   help                           This text
 
@@ -1219,6 +1368,7 @@ main() {
     verify)    cmd_verify "$@" ;;
     restore)   cmd_restore "$@" ;;
     upgrade)   cmd_upgrade "$@" ;;
+    check-update) cmd_check_update "$@" ;;
     uninstall) cmd_uninstall "$@" ;;
     help)      cmd_help ;;
     *) cmd_help >&2; die "unknown command: $cmd" ;;

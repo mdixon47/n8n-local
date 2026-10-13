@@ -43,8 +43,9 @@ it on a scratch volume passes `./n8nctl.sh verify`.
 
 ## 2. Get told when something fails
 
-`status` already warns when the newest snapshot is 26 hours old or more;
-it is only seen when someone runs it.
+`status` already warns when the newest snapshot is 26 hours old or more.
+Since 2026-10-13 the nightly job (`launchd/nightly.sh`) shows a Mac
+notification when the backup fails; the n8n side below is still open.
 
 **What:** on 2026-10-09 the Gmail labelling workflow failed 72 times before
 anyone looked, and the LinkedIn failures on 2026-10-11 were also found by
@@ -57,13 +58,7 @@ hand. The nightly backup reports only to
   through the existing Gmail credential), activate it (2.42 skips inactive
   error workflows), and set it as the error workflow on every active
   workflow.
-- In `launchd/n8nctl-backup.applescript`: when the backup exits non-zero,
-  show a macOS notification (`display notification`) as well as writing to
-  the log. Notifications cannot hang the run the way a dialog would.
-
-**Done when:** a deliberately failing test workflow sends an email, and a
-backup run with the drive's backup folder made read-only shows a
-notification.
+**Done when:** a deliberately failing test workflow sends an email.
 
 ## 3. Move the project to the internal disk
 

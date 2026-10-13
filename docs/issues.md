@@ -156,10 +156,10 @@ wanted).
 
 | File | Line | Says | Should say |
 | --- | --- | --- | --- |
-| CLAUDE.md | 43, 63 | `--version 2.35.3` in examples | `2.42.6` |
-| CLAUDE.md | 79 | `KNOWN_MODULES` "mirrors `modules.config.ts` at 2.35.3" | after item 4, `2.42.6` |
-| README.md | 68, 355 | `2.39.8` in install and upgrade examples | `2.42.6` |
-| README.md | 160, 168 | module list "at 2.35.3" | after item 4, `2.42.6` |
+| CLAUDE.md | 43, 63 | `--version 2.35.3` in examples | `2.42.7` |
+| CLAUDE.md | 79 | `KNOWN_MODULES` "mirrors `modules.config.ts` at 2.35.3" | after item 4, `2.42.7` |
+| README.md | 68, 355 | `2.39.8` in install and upgrade examples | `2.42.7` |
+| README.md | 160, 168 | module list "at 2.35.3" | after item 4, `2.42.7` |
 | README.md | 430 | "n8n 2.35 ships English only" | "n8n ships English only" |
 | README.md | Security notes, Layout | loopback binding as the setup | mention this install's LAN mode (learn.md 17) |
 
@@ -254,8 +254,10 @@ purpose changes:
   `.env`. Snapshots taken before then still hold it in their `.env`, until
   pruned. Revoke it at openrouter.ai if no longer needed, and delete any
   OpenRouter credential under Overview, Credentials that no workflow uses.
-- **Newer n8n:** 2.43.x images exist (2.43.3 on 2026-10-09). Read the 2.43
-  release notes before moving; follow learn.md section 11.
+- **Newer n8n:** on 2.42.7 since 2026-10-13. Patches now install nightly;
+  2.43 is in beta and becomes stable in about a week. When the nightly
+  notification says it is out, read the 2.43 release notes, then follow
+  learn.md section 11.
 
 ## 10. Accepted risks to re-check
 

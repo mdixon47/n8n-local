@@ -176,6 +176,47 @@ check       "status: backup age shown"               bash -c "\"$CTL\" status | 
 mkdir -p "$WORK/oldb/20200101-000000" && : > "$WORK/oldb/20200101-000000/n8n-data.tar.gz"
 check       "status: stale backup flagged"           bash -c "N8N_BACKUP_DIR='$WORK/oldb' \"$CTL\" status 2>&1 | grep -q 'nightly backup may have stopped'"
 
+# --- update check --------------------------------------------------------------
+# installed: 2.36.4 (from the runtime checks above); fixture: stable 2.37.2, beta 2.38.0, 1.123.99 published later
+check       "patch-only waits for a day-old patch"   bash -c "N8NCTL_PATCH_SOAK_DAYS=100000 \"$CTL\" -y upgrade --patch-only 2>&1 | grep -q 'No patch upgrade to install' && grep -qx 'N8N_VERSION=2.36.4' '$ENV'"
+sed '2i\
+# changed' "$HERE/fixtures/get-n8n.sh" > "$WORK/changed-installer.sh"
+check       "patch-only refuses a changed installer" bash -c "out=\$(STUB_INSTALLER='$WORK/changed-installer.sh' \"$CTL\" -y upgrade --patch-only 2>&1); [ \$? -ne 0 ] && grep -q 'installer is new or changed' <<<\"\$out\""
+check       "refused upgrade changed nothing"        grep -qx 'N8N_VERSION=2.36.4' "$ENV"
+printf '/opt/n8n-local\n' > "$STUB_STATE/dead"
+check       "patch-only: exit 4 when checks fail"    bash -c "\"$CTL\" -y upgrade --patch-only >/dev/null 2>&1; [ \$? -eq 4 ]"
+rm -f "$STUB_STATE/dead"
+check       "patch-only took the 2.36 patch only"    grep -qx 'N8N_VERSION=2.36.9' "$ENV"
+check       "patch-only logged"                      grep -q 'upgrade  from=2.36.4 to=2.36.9 .*patch_only=1' "$N8N_BASE_DIR/n8nctl.log"
+check       "patch-only: nothing newer, exit 0"      bash -c "\"$CTL\" -y upgrade --patch-only | grep -q 'newest patch of 2.36'"
+check       "check-update exits 3 when behind"       bash -c "\"$CTL\" check-update >/dev/null 2>&1; [ \$? -eq 3 ]"
+check       "check-update finds stable 2.37.2"       bash -c "\"$CTL\" check-update 2>&1 | grep -q 'Latest stable:  2.37.2'"
+check       "check-update calls it a minor update"   bash -c "\"$CTL\" check-update 2>&1 | grep -q 'new minor version is out: 2.37.2'"
+check       "check-update shows the beta apart"      bash -c "\"$CTL\" check-update 2>&1 | grep -q 'Beta:           2.38.0'"
+check       "check-update ignores 1.x and betas"     bash -c "! \"$CTL\" check-update 2>&1 | grep -qE 'Latest stable:  (1\.123|2\.38)'"
+check       "check-update logged"                    grep -q 'update-check  current=2.36.9 stable=2.37.2 beta=2.38.0 status=minor' "$N8N_BASE_DIR/n8nctl.log"
+check       "status shows the update"                bash -c "\"$CTL\" status 2>&1 | grep -q 'Update:     n8n 2.37.2 is available'"
+check       "upgrade without --version: stable"      bash -c "\"$CTL\" -y upgrade --skip-backup && grep -qx 'N8N_VERSION=2.37.2' '$ENV'"
+check       "check-update up to date, exit 0"        bash -c "\"$CTL\" check-update | grep -q 'Up to date'"
+check       "status: up to date"                     bash -c "\"$CTL\" status | grep -q 'Update:     up to date with stable 2.37.2'"
+printf '2020-01-01T00:00:00Z  update-check  current=2.37.2 stable=2.37.2 beta=none status=current\n' >> "$N8N_BASE_DIR/n8nctl.log"
+check       "status: stale check flagged"            bash -c "\"$CTL\" status 2>&1 | grep -q 'last check was [0-9]* days ago'"
+check       "check-update: major version noticed"    bash -c "STUB_RELEASES=github-releases-major.json \"$CTL\" check-update 2>&1 | grep -q 'n8n 3 is out (3.0.1)'"
+check_fails "upgrade refuses an unasked major jump"  env STUB_RELEASES=github-releases-major.json "$CTL" -y upgrade --skip-backup
+check       "major jump left the version alone"      grep -qx 'N8N_VERSION=2.37.2' "$ENV"
+
+# --- nightly job (launchd/nightly.sh) -------------------------------------------
+NIGHTLY="$HERE/../launchd/nightly.sh"
+export N8NCTL_NIGHTLY_LOG="$WORK/nightly.log" N8NCTL_NIGHTLY_STATE="$WORK/nightly-state"
+check       "nightly: up to date, no notification"   bash -c "out=\$(\"$NIGHTLY\") && [ -z \"\$out\" ] && grep -q 'nightly: done' '$WORK/nightly.log'"
+check       "nightly: backed up"                     grep -q 'Backup written to' "$WORK/nightly.log"
+check       "nightly: tells about a new major once"  bash -c "STUB_RELEASES=github-releases-major.json \"$NIGHTLY\" | grep -q '^NOTIFY:n8n 3.0.1 is available'"
+check       "nightly: does not repeat it"            bash -c "out=\$(STUB_RELEASES=github-releases-major.json \"$NIGHTLY\") && ! grep -q 3.0.1 <<<\"\$out\""
+mkdir -p "$WORK/ro" && chmod 500 "$WORK/ro"
+check       "nightly: failed backup is reported"     bash -c "N8N_BACKUP_DIR='$WORK/ro/b' \"$NIGHTLY\" | grep -q '^NOTIFY:n8n backup failed'"
+check       "nightly: no upgrade after a bad backup" bash -c "! N8N_BACKUP_DIR='$WORK/ro/b' \"$NIGHTLY\" | grep -q 'patch upgrade'"
+chmod 700 "$WORK/ro"
+
 # --- start / stop / logs / uninstall ------------------------------------------
 check       "stop"                                   "$CTL" stop
 check       "stopped"                                test ! -f "$STUB_STATE/running"

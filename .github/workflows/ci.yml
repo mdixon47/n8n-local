@@ -35,11 +35,11 @@ jobs:
 
       - name: Syntax
         shell: bash
-        run: bash -n n8nctl.sh test/smoke.sh test/stubs/curl test/stubs/docker
+        run: bash -n n8nctl.sh launchd/nightly.sh test/smoke.sh test/stubs/curl test/stubs/docker
 
       - name: ShellCheck
         shell: bash
-        run: shellcheck n8nctl.sh test/smoke.sh test/stubs/curl test/stubs/docker
+        run: shellcheck n8nctl.sh launchd/nightly.sh test/smoke.sh test/stubs/curl test/stubs/docker
 
       - name: Preload, network check, gallery and ideas page parse
         shell: bash

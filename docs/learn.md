@@ -18,7 +18,7 @@ the project folder (the one holding `n8nctl.sh`), not from `docs/`.
 8. [How-to: your first agent](#8-how-to-your-first-agent)
 9. [How-to: a fallback provider](#9-how-to-a-fallback-provider)
 10. [How-to: the backup drill](#10-how-to-the-backup-drill)
-11. [How-to: upgrade and roll back](#11-how-to-upgrade-and-roll-back)
+11. [How-to: upgrade, roll back and keep up to date](#11-how-to-upgrade-roll-back-and-keep-up-to-date)
 12. [How-to: reach n8n from the internet without opening it up](#12-how-to-reach-n8n-from-the-internet-without-opening-it-up)
 13. [How-to: keep the database small](#13-how-to-keep-the-database-small)
 14. [How-to: read the log](#14-how-to-read-the-log)
@@ -54,7 +54,8 @@ the project folder (the one holding `n8nctl.sh`), not from `docs/`.
  n8n/.env       versions, secrets, model, keys       (chmod 600, never printed)
  n8nctl.sh      the wrapper you type commands into
  n8nctl.log     what the wrapper did, and the hash of every installer it ran
- templates-api/ the gallery server and its build script (section 20)
+ templates-api/ the gallery server, its build script and the ideas page (section 20)
+ launchd/       the 23:00 job: backup, n8n patch upgrade, update check (sections 10, 11)
  docs/          this guide and issues.md
 ```
 
@@ -394,9 +395,13 @@ itself was the mistake.
 Automate it on macOS with the launchd job in the README. On this install it
 runs every night at 23:00 and keeps fourteen snapshots; [backup-plan.md](backup-plan.md)
 has the schedule, the weekly checks, and how to recover a single workflow
-without restoring everything.
+without restoring everything. The same nightly run also installs n8n patch
+releases and checks for new versions (section 11), and shows a Mac
+notification when the backup fails. Read its log with
+`tail -20 ~/Library/Logs/n8nctl-backup.log`; a good night ends in
+`=== ... nightly: done`.
 
-## 11. How-to: upgrade and roll back
+## 11. How-to: upgrade, roll back and keep up to date
 
 Before upgrading, read the release notes for every minor version you will
 cross, looking for behaviour changes in nodes you use. Then:
@@ -436,6 +441,115 @@ forward, and going back is a restore, not a downgrade.
 
 Before n8n 3.0 in October 2026: take a backup, change any sub-workflow whose
 caller policy is "Any workflow" to an explicit list, then upgrade.
+
+**Keeping up.** n8n has two release channels:
+
+- **Stable** (Docker tag `latest`, GitHub releases without the pre-release
+  mark) gets a patch release most days: bug and security fixes only.
+- **Beta** (Docker tag `next`, marked pre-release on GitHub) carries the
+  next minor version. It becomes stable after about a week.
+
+This install follows stable. GitHub also lists 1.123.x releases, which are
+maintenance for the old 1.x line; the wrapper ignores them and betas, and
+picks the highest stable 2.x release itself. Who installs what:
+
+| Release | Example | Who installs it |
+| --- | --- | --- |
+| Patch | 2.42.7 → 2.42.8 | The nightly job, at 23:00, once the patch is a day old |
+| Minor | 2.42 → 2.43 | You, after reading the release notes |
+| Major | 2 → 3 | You, after the migration notes, on purpose |
+
+**Check by hand** at any time:
+
+```bash
+./n8nctl.sh check-update
+```
+
+Expected when behind on a patch (this was 2026-10-13, before the upgrade):
+
+```
+Installed:      n8n 2.42.6
+Latest stable:  2.42.7 (2026-10-12)
+Beta:           2.43.4 (not for this install; it becomes stable after about a week)
+! 1 patch release(s) behind: 2.42.7 (2026-10-12)
+Patch releases are bug and security fixes. Upgrade soon (a backup is taken first):
+  ./n8nctl.sh upgrade --version 2.42.7
+```
+
+and `+ Up to date` once there is nothing newer. It exits 3 when a stable
+update exists and 0 otherwise. A minor version adds a link to the release
+notes; a major one says so in plain words. Every check is written to
+`n8nctl.log`, and `status` shows the last one without going online:
+
+```
+Update:     up to date with stable 2.42.7 (checked 2026-10-13)
+```
+
+`status` warns when n8n is behind, and when the last check is more than 8
+days old.
+
+**The nightly job.** At 23:00 the LaunchAgent opens the *n8nctl Backup*
+app, which runs `launchd/nightly.sh`:
+
+1. `backup`, then `backups --prune 14`.
+2. Only if the backup worked: `upgrade --patch-only`. It picks the newest
+   patch of the installed minor version (2.42.x, never 2.43), skips any
+   released less than a day ago, takes its own pre-upgrade snapshot,
+   upgrades, and runs the same checks as a manual upgrade. It refuses to
+   run an installer whose hash differs from the last one run, because
+   nobody is there to review it.
+3. `check-update`, for new minor and major versions.
+
+n8n restarts for about a minute on a night with a patch to install;
+workflows that run at 23:00 should not depend on that minute. Everything
+goes to `~/Library/Logs/n8nctl-backup.log`. You only hear about it when
+something needs you:
+
+| Notification | Meaning | What to do |
+| --- | --- | --- |
+| `Upgraded n8n 2.42.7 -> 2.42.8 (automatic patch upgrade)` | It worked | Nothing; `status` shows the new version |
+| `n8n was upgraded, but the checks after it failed` | Upgraded, then a bind mount or the preload check failed | `./n8nctl.sh status`; if n8n misbehaves, run the rollback line from the log |
+| `The automatic n8n patch upgrade did not run (exit 1)` | Offline, GitHub rate limit, or the installer changed | Read the log. For a changed installer: `./n8nctl.sh upgrade --version X.Y.Z` in a terminal, review it, answer the prompts |
+| `n8n 2.43.0 is available. Read the release notes, then ...` | A new minor (or major) version, told once | Read the release notes, then upgrade by hand (below) |
+| `n8n backup failed` | No snapshot tonight, so no upgrade either | Read the log; `./n8nctl.sh backup` by hand |
+
+**After the app is rebuilt** (only when `launchd/n8nctl-backup.applescript`
+changes; edits to `nightly.sh` need no rebuild), macOS asks again for access
+to the drive. Run it once while you are at the Mac:
+
+```bash
+launchctl kickstart -k gui/$(id -u)/com.n8nctl.backup
+```
+
+Click **Allow** for the removable volume, and allow notifications if
+asked. Unanswered, the 23:00 run waits at that prompt and makes no backup.
+
+**A minor version, by hand.** When the notification arrives:
+
+1. Read the release notes for the new minor version
+   (<https://docs.n8n.io/release-notes/>), looking for nodes you use.
+2. `./n8nctl.sh check-update` shows the exact version to type.
+3. `./n8nctl.sh upgrade --version 2.43.X`. Read the `Bind mounts` and
+   `Preload` lines at the end; `upgrade` exits 4 when either fails.
+4. Open the editor, run one workflow you rely on, and click the
+   Assistant's **See all** to check the ideas page still opens.
+5. If something is wrong: the `Rollback:` line it printed.
+
+**A major version** (n8n 3 is due in October 2026). `upgrade` without
+`--version` refuses it with a message, so it never happens by accident, and
+the nightly job never crosses even a minor version. Do it on purpose: read
+the migration notes, fix what they list (here: sub-workflows whose caller
+policy is "Any workflow"), `./n8nctl.sh backup`, upgrade with the explicit
+`--version`, and test as for a minor version. Keep the `Rollback:` line
+until you are sure; the snapshot is the only way back, because migrations
+only go forward.
+
+**Turn automatic patches off** by deleting step 2 (the
+`upgrade --patch-only` block) from `launchd/nightly.sh`; the backup and the
+notifications keep working, and nothing needs rebuilding.
+
+The first upgrade made this way: 2.42.6 to 2.42.7 on 2026-10-13, rollback
+point `n8n-backups/20261013-004759`.
 
 ## 12. How-to: reach n8n from the internet without opening it up
 
@@ -498,7 +612,14 @@ never a secret value:
 2026-09-19T17:51:03Z  backup  path=/.../20260919-175103 reason=manual version=2.35.3 volume=n8n_n8n-data data_sha256=...
 2026-09-19T20:12:40Z  set-key  var=OPENROUTER_API_KEY action=set
 2026-09-19T20:13:02Z  modules  action=enable module=agents value=agents
+2026-10-13T00:47:07Z  update-check  current=2.42.6 stable=2.42.7 beta=2.43.4 status=patch
+2026-10-13T00:48:16Z  upgrade  from=2.42.6 to=2.42.7 backup=/.../n8n-backups/20261013-004759 no_start=0
 ```
+
+`update-check` lines are what `status` reads for its `Update:` line. From
+n8nctl 1.6.0 `upgrade` lines end in `patch_only=0` or `patch_only=1`; `1`
+means the nightly job did it, and an `upgrade-checks ... result=failed`
+line after one means its checks failed.
 
 Three uses. First, the `installer` lines are how the wrapper knows whether
 the upstream script changed; if it warns about a new hash, compare it with
@@ -648,6 +769,29 @@ download it. In the editor, create a workflow, then use its menu's
 warning and pick your own credential. Read any Code node. Add the tags
 `template` and a `tpl: ...` category if it should appear in the gallery
 (section 20).
+
+**From n8n.io.** The ideas page imports single templates from n8n.io's
+library straight into this n8n (section 20).
+
+**Templates that need a community node.** Some templates use nodes that
+are not part of n8n: they come from npm packages (*community nodes*).
+Running one before the package is installed fails with
+`Problem running workflow. Unrecognized node type: <type>`. Read the type:
+
+- `<package>.<node>`, such as `@blotato/n8n-nodes-blotato.blotato`: install
+  `<package>` under Settings, Community nodes, Install. The workflow then
+  works as it is.
+- `CUSTOM.<node>`, such as `CUSTOM.scrapeNinja`: the author loaded the node
+  from a folder on their own machine, a type no other n8n has. Find the
+  matching npm package (here `n8n-nodes-scrapeninja`) and install it; the
+  installed node is then `<package>.<node>`, so the workflow's nodes also
+  need the new type. [issues.md](issues.md) item 11 has the commands for
+  the ScrapeNinja template.
+
+Community packages are third-party code running inside n8n: check who
+publishes one and when it was last updated before installing it. After
+installing one, run `python3 -I templates-api/build.py`, so the gallery
+knows the new node types.
 
 **Many at once.** There is no wrapper command for this yet; it is listed in
 [issues.md](issues.md). The 2026-10-09 import was done with n8n's CLI
@@ -808,8 +952,13 @@ Reading order for [n8nctl.sh](../n8nctl.sh), top to bottom:
 - **Helpers**: `ok`, `warn`, `die`, `log`, `confirm`. `confirm` returns yes
   under `-y`, asks on a terminal, and refuses otherwise, which is why
   destructive commands cannot run by accident from a script.
-- **Portability**: `sha256_file`, `file_mode`, `version_lt`. These exist
-  because macOS ships BSD tools and bash 3.2.
+- **Portability**: `sha256_file`, `file_mode`, `version_lt`, `days_ago`.
+  These exist because macOS ships BSD tools and bash 3.2.
+- **Releases**: `release_list` turns GitHub's release list into
+  `<version> stable|beta <date>` lines (with awk, no `jq`), `latest_of`
+  picks the highest of one kind, and `newest_patch` the newest day-old patch
+  of the installed X.Y. `check-update`, `upgrade` and `upgrade --patch-only`
+  all use them.
 - **Docker**: `compose` adds `compose.override.yml` when it exists (a bare
   `-f` would otherwise ignore it), `detect_volume` finds `*n8n-data`,
   `wait_healthy` polls `/healthz`.
@@ -823,6 +972,11 @@ Reading order for [n8nctl.sh](../n8nctl.sh), top to bottom:
   `run_installer` runs that file with `N8N_DIR` pointed at `n8n/`.
 - **Backup core**: `do_backup` is shared by `backup`, `upgrade`, `restore`
   and `uninstall`. A trap restarts n8n if the archive step fails.
+  `verify_snapshot` is shared by `verify` and `restore`, which checks a
+  snapshot before deleting anything.
+- **Runtime checks**: `check_runtime` reads container health checks, lists
+  each container's bind mounts and tries to read them, and looks for the
+  preload's line in the n8n log. `status` prints it; `upgrade` acts on it.
 - **Commands**: one `cmd_<name>` per subcommand, dispatched by the `case` at
   the bottom.
 
@@ -837,12 +991,17 @@ Why each rail exists, in one line each:
 | `.env` travels with the tarball | A restore whose credentials cannot be decrypted |
 | Module names validated | An unknown module name stopping n8n from booting |
 | Loopback binding (the default; this install opts out, section 17) | The editor reachable by anyone on the same Wi-Fi |
+| `restore` verifies the snapshot first | A damaged tarball found only after the live data is deleted |
+| Installer started with `--no-start`, then checks after `upgrade` | n8n running without the override, or a dead mount nobody noticed |
+| Unattended upgrades: same X.Y, a day old, known installer only | A broken release or a changed installer installed while nobody watches |
+| No unasked major version | Crossing to n8n 3 by typing a plain `upgrade` |
 
 The Templates gallery lives outside the wrapper: `templates-api/server.py`
 (a standard-library Python server, run by the `templates-api` compose
-service) and `templates-api/build.py` (turns an `export` into its data).
-The wrapper still starts, stops and lists it, because it is part of the
-same compose project.
+service), `templates-api/build.py` (turns an `export` into its data), and
+`templates-api/web/` (the ideas page and the editor hook). The wrapper still
+starts, stops and lists it, because it is part of the same compose project.
+So is the nightly job: `launchd/nightly.sh` only calls wrapper commands.
 
 To change the wrapper: edit, then `bash -n n8nctl.sh && shellcheck n8nctl.sh
 && test/smoke.sh`. The smoke test runs every command against fake `docker`
@@ -853,18 +1012,31 @@ and `curl` in about ten seconds, and CI repeats it on Linux and macOS.
 - **Agent Builder**: the editor for an agent: model, instructions, tools,
   skills, memory, schedules, channels.
 - **Assistant**: the n8n Assistant, module `instance-ai`. Helps build.
+- **Beta**: n8n's release channel for the next minor version (Docker tag
+  `next`); this install does not use it.
 - **Channel**: a place people talk to a published agent: Slack, Telegram, Linear.
+- **check-update**: the wrapper command that compares the installed n8n with
+  the latest stable release.
+- **Community node**: a node from an npm package rather than n8n itself,
+  installed under Settings, Community nodes.
 - **compose.override.yml**: your local changes to the stack, merged over the
   installer's `compose.yml`.
+- **`CUSTOM.<name>`**: a node type from a custom-nodes folder on a template
+  author's machine; it never exists here (section 19).
 - **Daytona**: a cloud sandbox service n8n uses for agent knowledge bases on
   self-hosted installs.
 - **Deprecated node**: an old node type (Function, Function Item) that n8n
   2.42 refuses to import or create; replace it with a Code node.
+- **Editor hook**: `templates-api/web/editor-hook.js`, which n8n adds to the
+  editor page (`EXTERNAL_FRONTEND_HOOKS_URLS`); it sends n8n.io template
+  links to the ideas page (section 20).
 - **Error workflow**: a workflow set in another workflow's settings to run
   when that one fails. Deleting it silently stops the error handling.
 - **Episodic memory**: agent memory across sessions; needs an OpenAI credential.
 - **Execution**: one run of a workflow.
 - **Generic key**: `N8N_INSTANCE_AI_MODEL_API_KEY`; overrides per-provider keys.
+- **Ideas page**: `http://<this-mac>.local:5690/`, ready Assistant prompts
+  plus local and n8n.io templates (section 20).
 - **Manifest**: the small file in a snapshot with version, volume, reason and
   the tarball's sha256.
 - **`.local` name**: this Mac's network name (`scutil --get LocalHostName`
@@ -874,6 +1046,11 @@ and `curl` in about ten seconds, and CI repeats it on Linux and macOS.
   in over plain HTTP (section 17).
 - **N8N_TEMPLATES_HOST**: where the editor's Templates page gets its data;
   points at `templates-api` here (section 20).
+- **Nightly job**: `launchd/nightly.sh`, run at 23:00: backup, patch
+  upgrade, update check, notifications (section 11).
+- **Patch / minor / major**: the three parts of a version, 2.42.7. A patch
+  (the 7) fixes bugs; a minor (the 42) adds features; a major (the 2)
+  removes or changes them.
 - **Preview** (feature label): works, changes often. Also the button that
   test-chats with an agent draft.
 - **Publish**: freeze an agent draft into the version that runs.
@@ -881,6 +1058,8 @@ and `curl` in about ten seconds, and CI repeats it on Linux and macOS.
 - **SearXNG**: the bundled private web search used by the Assistant.
 - **Session**: one stored conversation with an agent.
 - **Snapshot**: a backup folder made by `backup`.
+- **Stable**: n8n's release channel for production (Docker tag `latest`);
+  the one this install follows.
 - **Template**: a workflow tagged `template`, listed in the Templates
   gallery; `tpl: <Category>` tags group them.
 - **templates-api**: the compose service on port 5690 that serves the gallery.
@@ -935,6 +1114,27 @@ back with `restore` from a snapshot at the older version.
 
 **What happens in n8n 3.0?** Docker becomes the only install path, and the
 "Any workflow" caller policy is removed. This repo is already Docker-only.
+Neither `upgrade` without `--version` nor the nightly job will move to it;
+section 11 has the deliberate way.
+
+**Is n8n up to date?** `./n8nctl.sh status` shows the last check on its
+`Update:` line; `./n8nctl.sh check-update` checks now.
+
+**n8n was unavailable for a minute around 23:00.** The nightly job: the
+backup pauses n8n for a few seconds, and on nights with a new patch release
+the upgrade restarts it. `grep patch_only=1 n8nctl.log` lists the upgrades
+it made.
+
+**A notification says a new n8n version is available.** It is a minor or
+major version, which this install never takes on its own. Follow "A minor
+version, by hand" in section 11.
+
+**How do I stop automatic patch upgrades?** Delete the
+`upgrade --patch-only` block from `launchd/nightly.sh` (section 11).
+
+**`Unrecognized node type: ...` when running a template.** It needs a
+community node that is not installed; section 19 explains the two kinds of
+type name and what to do for each.
 
 ## 24. Further reading
 
@@ -943,6 +1143,8 @@ back with `restore` from a snapshot at the older version.
 - Build and manage agents: <https://docs.n8n.io/build/build-and-manage-agents>
 - Manage execution data: <https://docs.n8n.io/deploy/host-n8n/configure-n8n/scaling/manage-execution-data/>
 - Release notes: <https://docs.n8n.io/release-notes/>
+- Every n8n release, stable and pre-release: <https://github.com/n8n-io/n8n/releases>
+- Docker image tags (`latest` is stable, `next` is beta): <https://hub.docker.com/r/n8nio/n8n/tags>
 - Upstream installer source and history: <https://github.com/n8n-io/n8n/commits/master/docker/get-n8n.sh>
 - Template collection (your fork): <https://github.com/mdixon47/awesome-n8n-templates>,
   upstream <https://github.com/enescingoz/awesome-n8n-templates>

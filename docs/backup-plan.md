@@ -14,7 +14,8 @@ folder. Background on the commands is in [learn.md](learn.md) section 10.
 | Where | `n8n-backups/` on the Seagate USB drive; one copy |
 | Most work you can lose | About one day (everything since the last 23:00 run) |
 | Time to restore | A few minutes for the whole instance |
-| Runs as | LaunchAgent `com.n8nctl.backup`, which opens `~/Applications/n8nctl Backup.app`; log in `~/Library/Logs/n8nctl-backup.log` |
+| Runs as | LaunchAgent `com.n8nctl.backup`, which opens `~/Applications/n8nctl Backup.app`, which runs `launchd/nightly.sh`; log in `~/Library/Logs/n8nctl-backup.log` |
+| Same run | After a good backup: `upgrade --patch-only` (newest n8n patch, a day old), then `check-update`. Mac notifications for a failed backup, an upgrade, a failed check, or a new minor or major version (once each) |
 
 ## What a snapshot holds
 
@@ -151,7 +152,10 @@ ask (exit 126, `Operation not permitted`; an attempt to add `/bin/bash` to
 Full Disk Access never registered on this Mac). An app can ask, once. So the LaunchAgent
 runs `/usr/bin/open -W -g` on a small AppleScript app that does the work.
 
-- Source: `launchd/n8nctl-backup.applescript` (in git).
+- Source: `launchd/n8nctl-backup.applescript` (in git). It only runs
+  `launchd/nightly.sh` and turns its `NOTIFY:` lines into notifications, so
+  changes to the job itself need no rebuild. Anyone who can edit
+  `nightly.sh` controls what runs every night with the app's drive access.
 - Installed: `~/Applications/n8nctl Backup.app`, bundle id
   `local.n8nctl.backup`, ad-hoc signed, hidden from the Dock.
 - It never shows a dialog. Errors are written to the log, so an unattended
@@ -159,7 +163,8 @@ runs `/usr/bin/open -W -g` on a small AppleScript app that does the work.
 
 Rebuild after changing the source. The signature changes with every build,
 so macOS asks for permission again on the next run; run it once by hand and
-click **Allow**:
+click **Allow** (and allow its notifications if macOS asks). Last rebuilt
+2026-10-13, for the nightly script and notifications:
 
 ```bash
 APP="$HOME/Applications/n8nctl Backup.app"

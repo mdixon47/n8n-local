@@ -1,0 +1,110 @@
+[
+  {
+    "url": "https://api.github.com/repos/n8n-io/n8n/releases/1",
+    "tag_name": "n8n@3.0.1",
+    "target_commitish": "master",
+    "name": "n8n@3.0.1",
+    "draft": false,
+    "prerelease": false,
+    "created_at": "2026-02-02T07:00:00Z",
+    "published_at": "2026-02-02T07:00:01Z",
+    "assets": [],
+    "body": "notes with \"prerelease\": true inside the text"
+  },
+  {
+    "url": "https://api.github.com/repos/n8n-io/n8n/releases/1",
+    "tag_name": "n8n@3.0.0",
+    "target_commitish": "master",
+    "name": "n8n@3.0.0",
+    "draft": false,
+    "prerelease": false,
+    "created_at": "2026-02-01T07:00:00Z",
+    "published_at": "2026-02-01T07:00:01Z",
+    "assets": [],
+    "body": "notes with \"prerelease\": true inside the text"
+  },
+  {
+    "url": "https://api.github.com/repos/n8n-io/n8n/releases/1",
+    "tag_name": "stable",
+    "target_commitish": "master",
+    "name": "stable",
+    "draft": false,
+    "prerelease": false,
+    "created_at": "2026-01-07T07:00:00Z",
+    "published_at": "2026-01-07T07:00:01Z",
+    "assets": [],
+    "body": "notes with \"prerelease\": true inside the text"
+  },
+  {
+    "url": "https://api.github.com/repos/n8n-io/n8n/releases/1",
+    "tag_name": "n8n@1.123.99",
+    "target_commitish": "master",
+    "name": "n8n@1.123.99",
+    "draft": false,
+    "prerelease": false,
+    "created_at": "2026-01-06T07:00:00Z",
+    "published_at": "2026-01-06T07:00:01Z",
+    "assets": [],
+    "body": "notes with \"prerelease\": true inside the text"
+  },
+  {
+    "url": "https://api.github.com/repos/n8n-io/n8n/releases/1",
+    "tag_name": "n8n@2.38.0",
+    "target_commitish": "master",
+    "name": "n8n@2.38.0",
+    "draft": false,
+    "prerelease": true,
+    "created_at": "2026-01-05T07:00:00Z",
+    "published_at": "2026-01-05T07:00:01Z",
+    "assets": [],
+    "body": "notes with \"prerelease\": true inside the text"
+  },
+  {
+    "url": "https://api.github.com/repos/n8n-io/n8n/releases/1",
+    "tag_name": "beta",
+    "target_commitish": "master",
+    "name": "beta",
+    "draft": false,
+    "prerelease": true,
+    "created_at": "2026-01-05T07:00:00Z",
+    "published_at": "2026-01-05T07:00:01Z",
+    "assets": [],
+    "body": "notes with \"prerelease\": true inside the text"
+  },
+  {
+    "url": "https://api.github.com/repos/n8n-io/n8n/releases/1",
+    "tag_name": "n8n@2.37.2",
+    "target_commitish": "master",
+    "name": "n8n@2.37.2",
+    "draft": false,
+    "prerelease": false,
+    "created_at": "2026-01-05T07:00:00Z",
+    "published_at": "2026-01-05T07:00:01Z",
+    "assets": [],
+    "body": "notes with \"prerelease\": true inside the text"
+  },
+  {
+    "url": "https://api.github.com/repos/n8n-io/n8n/releases/1",
+    "tag_name": "n8n@2.37.1",
+    "target_commitish": "master",
+    "name": "n8n@2.37.1",
+    "draft": false,
+    "prerelease": false,
+    "created_at": "2026-01-02T07:00:00Z",
+    "published_at": "2026-01-02T07:00:01Z",
+    "assets": [],
+    "body": "notes with \"prerelease\": true inside the text"
+  },
+  {
+    "url": "https://api.github.com/repos/n8n-io/n8n/releases/1",
+    "tag_name": "n8n@2.36.9",
+    "target_commitish": "master",
+    "name": "n8n@2.36.9",
+    "draft": false,
+    "prerelease": false,
+    "created_at": "2026-01-01T07:00:00Z",
+    "published_at": "2026-01-01T07:00:01Z",
+    "assets": [],
+    "body": "notes with \"prerelease\": true inside the text"
+  }
+]

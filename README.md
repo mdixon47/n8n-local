@@ -246,6 +246,7 @@ Agent Builder and republishing it.
 | Check a snapshot | `./n8nctl.sh verify n8n-backups/<timestamp>` |
 | Keep only the newest N snapshots | `./n8nctl.sh backups --prune N` |
 | Roll back | `./n8nctl.sh restore n8n-backups/<timestamp>` |
+| Check for a newer n8n | `./n8nctl.sh check-update` |
 | Upgrade (backs up first) | `./n8nctl.sh upgrade --version X.Y.Z` |
 | Show or change modules | `./n8nctl.sh modules` · `modules --enable agents` · `modules --disable agents` |
 | Store the Daytona or Brave key | `./n8nctl.sh set-key --var daytona` · `set-key --var brave` |
@@ -416,8 +417,18 @@ the node icons into `templates-api/data/icons/`.
 ## Upgrading
 
 ```bash
-./n8nctl.sh upgrade --version 2.39.8
+./n8nctl.sh check-update                 # installed vs latest stable (exit 3 if behind)
+./n8nctl.sh upgrade --version 2.42.7
+./n8nctl.sh -y upgrade --patch-only      # what the nightly job runs
 ```
+
+Patch releases are installed automatically: the nightly job
+(`launchd/nightly.sh`, see [docs/backup-plan.md](docs/backup-plan.md)) runs
+`upgrade --patch-only` after its backup, which takes the newest patch of the
+installed minor version once it is a day old, refuses a changed installer,
+and exits 4 if the post-upgrade checks fail. Minor and major versions stay
+manual; the job sends one Mac notification per new one. `upgrade` without
+`--version` never crosses to a new major version.
 
 The wrapper fetches and (if changed) offers to review the installer, takes a
 backup, runs the upstream `--upgrade --no-start` (which only updates `.env`),

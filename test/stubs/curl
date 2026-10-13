@@ -10,9 +10,10 @@ for ((i=0;i<${#args[@]};i++)); do
   esac
 done
 case "$url" in
-  https://get.n8n.io) cp "$S/fixtures/get-n8n.sh" "$out"; exit 0 ;;
+  https://get.n8n.io) cp "${STUB_INSTALLER:-$S/fixtures/get-n8n.sh}" "$out"; exit 0 ;;
   *get-n8n-compose.yml*) cat "$S/fixtures/get-n8n-compose.yml"; exit 0 ;;
-  *api.github.com*) echo '{"tag_name": "n8n@2.35.3"}'; exit 0 ;;
+  # release list; STUB_RELEASES picks another fixture (e.g. one with a new major version)
+  *api.github.com/repos/n8n-io/n8n/releases*) cat "$S/fixtures/${STUB_RELEASES:-github-releases.json}"; exit 0 ;;
   *127.0.0.1:5678*) [[ -f "$STUB_STATE/running" ]] && exit 0 || exit 7 ;;
   *) echo "stub curl: unhandled $url" >&2; exit 22 ;;
 esac
