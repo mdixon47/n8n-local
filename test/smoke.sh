@@ -109,6 +109,12 @@ check       "backup manifest version"                grep -qx 'n8n_version=2.35.
 check       "verify passes"                          "$CTL" verify "$B1"
 check       "second backup creates a new snapshot"    bash -c "\"$CTL\" backup" && check "two snapshots exist" test "$(count_backups)" -eq 2
 check       "backups lists two"                      bash -c "[ \$(\"$CTL\" backups | grep -cE '^[0-9]{8}-[0-9]{6}') -eq 2 ]"
+check       "backup shows the size change"           bash -c "\"$CTL\" backup | grep -qE '^Data: .* MB, [+-][0-9.]+ MB since [0-9]{8}-[0-9]{6}'"
+check       "manifest records data_bytes"            bash -c "grep -qE '^data_bytes=[0-9]+\$' '$N8N_BASE_DIR'/n8n-backups/*/manifest"
+head -c 2097152 /dev/urandom > "$VOL/blob"
+check       "backup warns on a big jump"             bash -c "\"$CTL\" backup 2>&1 | grep -q 'data grew by more than half'"
+check       "no warning when it stays the same"      bash -c "! \"$CTL\" backup 2>&1 | grep -q 'data grew'"
+rm -f "$VOL/blob"
 echo "after" > "$VOL/marker"
 check       "restore -y"                             "$CTL" -y restore "$B1"
 check       "restore put data back"                  test "$(cat "$VOL/marker")" = "before"
@@ -216,6 +222,9 @@ mkdir -p "$WORK/ro" && chmod 500 "$WORK/ro"
 check       "nightly: failed backup is reported"     bash -c "N8N_BACKUP_DIR='$WORK/ro/b' \"$NIGHTLY\" | grep -q '^NOTIFY:n8n backup failed'"
 check       "nightly: no upgrade after a bad backup" bash -c "! N8N_BACKUP_DIR='$WORK/ro/b' \"$NIGHTLY\" | grep -q 'patch upgrade'"
 chmod 700 "$WORK/ro"
+head -c 4194304 /dev/urandom > "$VOL/blob"
+check       "nightly: big growth is reported"        bash -c "\"$NIGHTLY\" | grep -q '^NOTIFY:The n8n backup grew'"
+rm -f "$VOL/blob"
 
 # --- start / stop / logs / uninstall ------------------------------------------
 check       "stop"                                   "$CTL" stop

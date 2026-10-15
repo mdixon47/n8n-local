@@ -2,7 +2,8 @@
 #
 # The nightly job. The n8nctl Backup app (launchd/n8nctl-backup.applescript)
 # runs it at 23:00:
-#   1. backup, then prune to the newest 14 snapshots
+#   1. backup, then prune to the newest 14 snapshots; tell when the data
+#      grew by more than half since the night before
 #   2. only after a good backup: upgrade --patch-only, the newest patch of the
 #      installed n8n minor version once it is a day old (n8n restarts for
 #      about a minute when there is one)
@@ -27,8 +28,13 @@ cd "$(dirname "$0")/.." || { notify "Nightly n8n job: project folder not found";
 echo "=== $(stamp) nightly: start" >>"$LOG"
 
 # 1. backup
-if ./n8nctl.sh -y backup >>"$LOG" 2>&1 && ./n8nctl.sh -y backups --prune 14 >>"$LOG" 2>&1; then
+out="$(./n8nctl.sh -y backup 2>&1)"
+rc=$?
+printf '%s\n' "$out" >>"$LOG"
+if (( rc == 0 )) && ./n8nctl.sh -y backups --prune 14 >>"$LOG" 2>&1; then
   backup_ok=1
+  grep -q 'data grew by more than half' <<<"$out" &&
+    notify "The n8n backup grew by more than half since the last one. Check stored executions (docs/backup-plan.md)"
 else
   backup_ok=0
   notify "n8n backup failed. Details in ~/Library/Logs/n8nctl-backup.log"

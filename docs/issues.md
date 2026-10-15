@@ -168,7 +168,9 @@ historical log examples.
 
 ## 6. Scheduled workflows will skip missed runs
 
-**Status:** no action needed while they are off.
+**Status:** open. *Weekly Content Pipeline (Gemini → LinkedIn)* was active
+on 2026-10-15, so check its trigger now. `GENERIC_TIMEZONE` has been set
+explicitly since 2026-10-15 (`America/New_York`).
 
 **What:** since 2.36 a Schedule Trigger skips runs missed while n8n was
 down or the Mac slept, unless the trigger is set to coalesce them. Three of

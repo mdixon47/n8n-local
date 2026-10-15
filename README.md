@@ -280,9 +280,11 @@ and refuses to run without a terminal unless `-y` is given.
 helper container, restarts n8n and waits for it to be healthy, then copies
 `.env`, `compose.yml`, `compose.override.yml` (if present) and
 `searxng-settings.yml` next to the tarball with a `manifest` holding the
-version, volume name, reason, the tarball's sha256 and the pinned helper
-image. Expect a few seconds
-of downtime. Two snapshots in the same second get a `_2` suffix.
+version, volume name, reason, the tarball's sha256 and size, and the pinned
+helper image. Expect a few seconds
+of downtime. Two snapshots in the same second get a `_2` suffix. It prints
+the tarball's size and the change since the previous snapshot, and warns
+when the data grew by more than half (and by at least 1 MB).
 
 `verify <dir>` checks that all files are present, `.env` is mode 600, the
 tarball hash matches the manifest, the n8n version agrees between manifest and
@@ -667,7 +669,7 @@ volumes exist, set `N8N_VOLUME` to the right one.
 ├── exports/<timestamp>/      # gitignored: workflows/*.json, all-workflows.json, README.txt
 └── n8n-backups/<timestamp>/  # gitignored
     ├── n8n-data.tar.gz       # the Docker data volume
-    ├── manifest              # version, volume name, tarball sha256, reason
+    ├── manifest              # version, volume name, tarball sha256 and size, reason
     └── compose.yml, compose.override.yml, .env, searxng-settings.yml
 ```
 

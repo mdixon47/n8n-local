@@ -17,7 +17,7 @@
 # Usage: ./n8nctl.sh <command> [options]    (see ./n8nctl.sh help)
 set -euo pipefail
 
-N8NCTL_VERSION="1.6.0"
+N8NCTL_VERSION="1.6.1"
 INSTALLER_URL="https://get.n8n.io"
 # Newest 100 releases. "latest" alone is not enough: n8n also publishes 1.x
 # maintenance releases, and betas are marked prerelease.
@@ -138,6 +138,9 @@ file_mode() {
 }
 
 dir_size() { du -sh "$1" 2>/dev/null | cut -f1; }
+file_bytes() { wc -c <"$1" | tr -d ' '; }
+# Bytes as MB with one decimal (1 MB = 1048576 bytes, as du -h counts).
+mb() { awk -v b="$1" 'BEGIN { printf "%.1f MB", b / 1048576 }'; }
 
 # Seconds since the epoch for a snapshot name (YYYYMMDD-HHMMSS[_N], UTC), or
 # nothing if it cannot be parsed.
@@ -463,10 +466,11 @@ pick_version() {
 # Backup core (shared by backup, upgrade, restore, uninstall)
 # ---------------------------------------------------------------------------
 do_backup() {
-  local reason="${1:-manual}" vol ts dest n was_running=0 ver sandbox f hash
+  local reason="${1:-manual}" vol ts dest n was_running=0 ver sandbox f hash prev bytes
   require_install
   check_docker
   vol="$(detect_volume)" || die "no data volume matching *n8n-data found. Has n8n been started at least once? (N8N_VOLUME overrides detection)"
+  prev="$(list_backups | tail -n1)"
   ts="$(date -u +%Y%m%d-%H%M%S)"
   dest="$N8N_BACKUP_DIR/$ts"
   # Two snapshots in the same second (e.g. pre-restore then restore) get a suffix.
@@ -504,6 +508,7 @@ do_backup() {
   ver="$(env_get N8N_VERSION)"
   sandbox="$(env_get N8N_SANDBOX_VERSION)"
   hash="$(sha256_file "$dest/n8n-data.tar.gz")"
+  bytes="$(file_bytes "$dest/n8n-data.tar.gz")"
   cat >"$dest/manifest" <<EOF
 created=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 reason=$reason
@@ -511,12 +516,33 @@ n8n_version=${ver:-unknown}
 sandbox_version=${sandbox:-unknown}
 volume=$vol
 data_sha256=$hash
+data_bytes=$bytes
 n8nctl_version=$N8NCTL_VERSION
 helper_image=$HELPER_IMAGE
 EOF
   BACKUP_PATH="$dest"
   ok "Backup written to $dest ($(dir_size "$dest"))"
-  log "backup  path=$dest reason=$reason version=${ver:-unknown} volume=$vol data_sha256=$hash helper=$HELPER_IMAGE"
+  report_growth "$prev" "$bytes"
+  log "backup  path=$dest reason=$reason version=${ver:-unknown} volume=$vol data_sha256=$hash data_bytes=$bytes helper=$HELPER_IMAGE"
+}
+
+# Compares a new data tarball with the previous snapshot's, so growth is
+# noticed long before the disk fills. Warns when it grew by more than half
+# (and by at least 1 MB).
+report_growth() {
+  local prev="$1" bytes="$2" before delta sign=""
+  if [[ -z "$prev" || ! -f "$prev/n8n-data.tar.gz" ]]; then
+    say "Data:   $(mb "$bytes") (no earlier snapshot to compare)"
+    return 0
+  fi
+  before="$(file_bytes "$prev/n8n-data.tar.gz")"
+  delta=$((bytes - before))
+  (( delta >= 0 )) && sign="+"
+  say "Data:   $(mb "$bytes"), $sign$(mb "$delta") since $(basename "$prev")"
+  if (( bytes * 2 > before * 3 && delta >= 1048576 )); then
+    warn "data grew by more than half since the previous snapshot; stored executions are the usual cause (docs/backup-plan.md, \"Disk use\")"
+  fi
+  return 0
 }
 
 manifest_get() { sed -n "s/^$2=//p" "$1/manifest" 2>/dev/null | head -n1; }

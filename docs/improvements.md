@@ -17,7 +17,7 @@ When an item is done, delete it here and mention it in the commit message.
 | 1 | Keep a second, encrypted copy of the backups | All snapshots are on one USB drive | 30 min |
 | 2 | Get told when something fails | Failures were found by hand, after the fact | 30 min |
 | 3 | Move the project to the internal disk | Removes the dead-bind-mount risk | 1 h |
-| 4 | Timezone and backup size | Small checks before activating schedules | 20 min |
+| 4 | Store less per run of the Gmail auto-labeller | It is 90% of the backup's growth | 10 min |
 
 Done on 2026-10-12 (n8nctl 1.5.0): `restore` verifies the snapshot first;
 `upgrade` never lets the installer start n8n and checks the result; `status`
@@ -25,6 +25,12 @@ checks container health, bind mounts, the preload and backup age; the
 network check is `test/netcheck.js`; the gallery sends CORS headers only to
 the editor; the helper image is pinned; CI parses the preload, the network
 check and the gallery code.
+
+Done on 2026-10-15 (n8nctl 1.6.1): `GENERIC_TIMEZONE=America/New_York` is
+set in `.env`; `backup` prints the data size and the change since the
+previous snapshot, records `data_bytes` in the manifest, and warns when it
+grew by more than half; the nightly job turns that warning into a
+notification.
 
 ## 1. A second, encrypted copy of the backups
 
@@ -49,15 +55,24 @@ notification when the backup fails; the n8n side below is still open.
 
 **What:** on 2026-10-09 the Gmail labelling workflow failed 72 times before
 anyone looked, and the LinkedIn failures on 2026-10-11 were also found by
-hand. The nightly backup reports only to
-`~/Library/Logs/n8nctl-backup.log`, which is checked weekly.
+hand. The labeller kept failing: 101 errors on 2026-10-11 and 86 on
+2026-10-12, with nobody told.
 
-**Fix:**
+The error workflow already exists and works: *Gmail Inbox Triage - Error
+Handler* (Error Trigger, then a Gmail send) is active and sent 20 emails on
+2026-10-09. But only *Gmail Inbox Triage* uses it. These active workflows
+have no error workflow (checked 2026-10-15):
 
-- In n8n: make one error workflow (an Error Trigger that sends an email
-  through the existing Gmail credential), activate it (2.42 skips inactive
-  error workflows), and set it as the error workflow on every active
-  workflow.
+- Auto-label incoming Gmail messages with AI
+- Weekly Content Pipeline (Gemini → LinkedIn)
+- Weekly Facebook Content Scheduler
+- Facebook API Check Reminder
+
+**Fix:** in each one, open Workflow settings and set "Error workflow" to
+*Gmail Inbox Triage - Error Handler*. Then rename the handler to something
+like *Error alerts*, since it now covers everything. Set it on every new
+workflow too.
+
 **Done when:** a deliberately failing test workflow sends an email.
 
 ## 3. Move the project to the internal disk
@@ -77,13 +92,31 @@ volume itself does not move.
 **Done when:** `status` is clean after a sleep and wake with the drive
 unplugged and plugged back in.
 
-## 4. Timezone and backup size
+## 4. Store less per run of the Gmail auto-labeller
 
-- **Timezone:** `GENERIC_TIMEZONE` is not set in `.env`, so schedules use
-  n8n's default, `America/New_York`. That matches this Mac by chance; set it
-  explicitly before activating the scheduled workflows (issues.md item 6).
-- **Backup size:** the nightly snapshot grew from 45 MB
-  (`20261011-030006`) to 114 MB (`20261012-030007`) in one day. Find out
-  why (execution data, binary files, or the template import) and check
-  that execution pruning keeps it in bounds.
-  `backup` could print the change from the previous snapshot's size.
+**What:** the nightly snapshot grew from 45 MB (2026-10-11) to 249 MB
+(2026-10-15). Measured 2026-10-15 inside the data volume:
+
+| Where | Size | From |
+| --- | --- | --- |
+| `database.sqlite`, execution data | 238 MB | *Auto-label incoming Gmail messages with AI*: 212 MB |
+| `storage/` (binary data, filesystem mode) | 213 MB | *Weekly Content Pipeline*: 204 MB, from 27 runs |
+
+The labeller runs about 210 times a day and stores about 170 KB per run,
+about 25 MB a day. *Gmail Inbox Triage* runs just as often and stores 3 KB
+per run. Pruning is on with the defaults (14 days, 10,000 executions), but
+the oldest execution is from 2026-10-09, so nothing has been pruned yet.
+Pruning starts around 2026-10-23. Estimate after that: about 350 MB of
+labeller data in the database and about 400 to 500 MB per snapshot, so
+6 to 7 GB for 14 snapshots. SQLite reuses freed pages but does not give
+them back to the disk, so the file stays at its largest size.
+
+**Fix:** in the labeller's Workflow settings, set "Save successful
+production executions" to "Do not save". Failed runs are still saved, and
+those are the ones worth reading. That should take the steady state down to
+roughly a tenth. Once the file has stopped growing, n8n's
+`DB_SQLITE_VACUUM_ON_STARTUP=true` in `.env` reclaims the space at the next
+restart. It can take a while on a large file, so remove it again afterwards.
+
+**Done when:** three nightly snapshots in a row change by less than 10 MB
+(`backup` prints the change).

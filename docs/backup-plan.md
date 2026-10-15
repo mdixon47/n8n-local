@@ -55,8 +55,11 @@ backup app" below.
   keep one longer, move it out of the pruned folder:
   `mv n8n-backups/<timestamp> ~/n8n-backups-keep/`. Anything outside
   `n8n-backups/` is never pruned.
-- **Disk use:** about 41 MB per snapshot today, so about 600 MB for 14. The
-  drive has over 7 TB free. Size grows with stored executions; learn.md
+- **Disk use:** 249 MB per snapshot on 2026-10-15, up from 45 MB four
+  days earlier, almost all of it stored executions (improvements.md
+  item 4). The drive has over 7 TB free. `backup` prints the change from
+  the previous snapshot and warns when the data grew by more than half;
+  the nightly job turns that warning into a notification. learn.md
   section 13 covers execution pruning.
 
 **When a run is skipped:** since 2026-10-11 the Mac does not sleep on AC
