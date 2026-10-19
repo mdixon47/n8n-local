@@ -142,6 +142,13 @@ check_fails "export rejects arguments"               "$CTL" export --foo
 check_fails "export needs n8n running"               "$CTL" export
 "$CTL" start >/dev/null
 
+# Same-second snapshots (_2, _10) must sort after their base name in any locale.
+ORD="$WORK/order"
+for s in 20261015-230502_10 20261015-230502_2 20261015-230502 20261015-230501; do
+  mkdir -p "$ORD/$s" && : > "$ORD/$s/n8n-data.tar.gz"
+done
+check       "backups sorted oldest first, any locale" bash -c "[ \"\$(LC_ALL=en_US.UTF-8 N8N_BACKUP_DIR='$ORD' \"$CTL\" backups 2>/dev/null | grep -oE '^[0-9]{8}-[0-9_]+' | tr '\n' ' ')\" = '20261015-230501 20261015-230502 20261015-230502_2 20261015-230502_10 ' ]"
+
 # --- prune --------------------------------------------------------------------
 check       "prune keeps newest 1"                   "$CTL" -y backups --prune 1
 check       "one snapshot left"                      test "$(count_backups)" -eq 1

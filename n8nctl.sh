@@ -17,7 +17,7 @@
 # Usage: ./n8nctl.sh <command> [options]    (see ./n8nctl.sh help)
 set -euo pipefail
 
-N8NCTL_VERSION="1.6.1"
+N8NCTL_VERSION="1.6.2"
 INSTALLER_URL="https://get.n8n.io"
 # Newest 100 releases. "latest" alone is not enough: n8n also publishes 1.x
 # maintenance releases, and betas are marked prerelease.
@@ -1098,11 +1098,20 @@ EOF
 
 # Snapshot directories, oldest first. Names are UTC timestamps (plus an
 # optional _N suffix), so lexical order is chronological.
+# Oldest first. Glob order follows the locale (en_US.UTF-8 puts
+# 20261015-230502_2 before 20261015-230502), so sort explicitly: by the
+# timestamp, then by the same-second suffix as a number (none counts as 1).
 list_backups() {
-  local d
+  local d name tab=$'\t'
   for d in "$N8N_BACKUP_DIR"/*/; do
-    [[ -f "$d/n8n-data.tar.gz" ]] && printf '%s\n' "${d%/}"
-  done
+    [[ -f "$d/n8n-data.tar.gz" ]] || continue
+    d="${d%/}"
+    name="${d##*/}"
+    case "$name" in
+      *_*) printf '%s\t%s\t%s\n' "${name%%_*}" "${name##*_}" "$d" ;;
+      *) printf '%s\t1\t%s\n' "$name" "$d" ;;
+    esac
+  done | LC_ALL=C sort -t "$tab" -k1,1 -k2,2n | cut -f3-
   return 0
 }
 
