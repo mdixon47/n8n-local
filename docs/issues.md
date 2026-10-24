@@ -23,6 +23,7 @@ When an item is done, delete it here and mention it in the commit message.
 | 9 | Housekeeping: duplicates, old exports, backup pruning | Later | 10 min |
 | 10 | Accepted risks to re-check | Review | none |
 | 11 | Two n8n.io imports need community nodes (`CUSTOM.scrapeNinja`, Blotato) | Before running them | 15 min |
+| 12 | Gmail credential expired: no email processed since 2026-10-16; two saved edits not published | Now | 10 min |
 
 ## 1. About 705 emails passed over without labels
 
@@ -371,3 +372,61 @@ of the ScrapeNinja one gets past the scrape step, and
 `curl -s http://Maliks-Mac-Studio.local:5690/api/local/node-types | grep -o '"customMap":{[^}]*}'`
 lists `CUSTOM.scrapeNinja`. Item 8 covers older templates with missing
 nodes.
+
+## 12. Gmail credential expired; two saved edits not published
+
+**Status:** open. Checked on 2026-10-21 against n8n 2.43.8.
+
+**What:** the *Gmail account* credential stopped refreshing at 21:18 UTC
+on 2026-10-16. Since then *Gmail Inbox Triage* and *Auto-label incoming
+Gmail messages with AI* have read no mail: their triggers fail on every
+poll (about 2,200 times each by 2026-10-21), and a failing poll creates no
+execution, so nothing shows in the executions list; only
+`./n8nctl.sh logs n8n` shows `There was a problem in 'New Email Received'`.
+*Facebook API Check Reminder* (2026-10-19) and *Gmail Inbox Triage - Error
+Handler* send through the same credential, so no failure email could go
+out either. *Google Sheets account* and *Google Drive account* expired the
+same week and were reconnected on 2026-10-21.
+
+Three Google credentials expiring within days of each other points to the
+Google Cloud OAuth app being in **Testing** mode, where Google expires
+refresh tokens after 7 days. Not yet confirmed.
+
+The triggers still hold their position (`lastTimeChecked` 2026-10-16
+21:17 UTC), so after the reconnect they work through the emails since then
+on their own; expect a burst of executions and Notion pages.
+
+Two workflows have saved changes that are not published, so their
+schedules still run the old version (n8n 2.x: Save does not publish):
+
+| Workflow | Live version | Saved, not live |
+| --- | --- | --- |
+| Weekly Content Pipeline (Gemini → LinkedIn) | 2026-10-21 14:45, no post limit: posted 10 at once that day | 15:06, *Limit Posts Per Run* (3) |
+| Facebook API Check Reminder | 2026-10-12 | 2026-10-19, *Send Reminder Email* changed |
+
+*Content Pipeline — Error Alert* is inactive and is not the pipeline's
+error workflow yet; error workflows must be active (backup-plan.md).
+
+Fixed on 2026-10-21: *Auto-label* failed 5 times between 10-14 and 10-16
+with `Model output doesn't fit required format`, losing every email in
+each batch (17 in one run). Its prompt said "Return only label names in
+JSON format", so the model sometimes answered with a bare array (`[]`,
+`["Notes"]`) instead of the parser's `{"output":{"labels":[...]}}`. The
+prompt now asks for the object, *Assign labels for message* retries 3
+times and then continues, and an email it still cannot classify is left
+unlabelled instead of failing the batch. Undo point: the workflow's
+history in the editor, or `n8n-backups/20261021-030007`.
+
+**Fix:**
+
+1. Overview, Credentials, *Gmail account*: reconnect, from this Mac
+   (OAuth redirects to `localhost`).
+2. In Google Cloud console, the project that owns the OAuth client:
+   Google Auth Platform, Audience. If the publishing status is *Testing*,
+   choose *Publish app*; then reconnect all three Google credentials once
+   more, because tokens issued in Testing keep their 7-day limit.
+3. Open the two workflows in the table and choose **Publish**.
+
+**Done when:** `./n8nctl.sh logs n8n | grep 'There was a problem'` shows
+nothing new, both Gmail workflows have fresh executions, and the two
+workflows above show no unpublished changes.
