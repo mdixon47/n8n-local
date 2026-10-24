@@ -5,8 +5,11 @@
 // ideas.json. The n8n.io library comes through the same server
 // (api/n8nio/search, api/templates/workflows/<id>), which fetches it from
 // api.n8n.io; importing opens the editor's own route
-// /workflows/templates/<id>, which reads the template from that server too. Every piece of template text is put on the page as text, never
-// as HTML: templates come from imported workflows.
+// /workflows/templates/<id>, which reads the template from that server too.
+// Importing also stores the template (POST api/local/library/<id>; the server
+// fetches it from n8n.io), and the catalog then lists it under "From n8n.io"
+// with source: 'n8nio'. Every piece of template text is put on the page as
+// text, never as HTML: templates come from imported workflows.
 //
 // Links go to the n8n editor: the origin passed as ?editor= by
 // editor-hook.js, else this host on port 5678. Prompts for the Assistant
@@ -361,6 +364,7 @@
         t.triggers[0] ? el('span', { class: 'tag', text: t.triggers[0], title: TRIGGER_HELP[t.triggers[0]] }) : null,
         el('span', { class: 'tag', text: `${t.nodeCount} node${t.nodeCount === 1 ? '' : 's'}` }),
         t.ai ? el('span', { class: 'tag ai', text: 'AI' }) : null,
+        t.source === 'n8nio' ? el('span', { class: 'tag', text: 'n8n.io', title: 'Stored from the n8n.io library' }) : null,
         t.missingNodes.length ? el('span', { class: 'tag warn', text: 'Needs a missing node' }) : null));
   }
 
@@ -691,6 +695,7 @@
   }
 
   function openTemplate(t) {
+    const fromN8nio = t.source === 'n8nio';
     const cats = t.categoryIds.map((id) => catName.get(id)).filter(Boolean).join(' · ');
     const diagramBox = el('div', { class: 'diagram-wrap' }, el('p', { class: 'empty', text: 'Loading the diagram…' }));
     const fitIdeas = ideaData.ideas.filter((i) => i._templates.includes(t));
@@ -721,9 +726,12 @@
       t.missingNodes.length ? missingNotice(t.missingNodes, (type) => type.split('.').pop()) : null,
       el('div', { class: 'actions' },
         el('a', { class: 'btn primary', href: links.template(t.id), target: '_blank', rel: 'noopener', text: 'Use this template' }),
-        el('button', { class: 'btn', type: 'button', text: 'Adapt with the Assistant', onclick: adapt }),
-        el('a', { class: 'btn', href: links.workflow(t.workflowId), target: '_blank', rel: 'noopener', text: 'Open the original' }),
+        // A stored n8n.io template has a workflow here only once it was imported and build.py has run.
+        t.workflowId ? el('button', { class: 'btn', type: 'button', text: 'Adapt with the Assistant', onclick: adapt }) : null,
+        t.workflowId ? el('a', { class: 'btn', href: links.workflow(t.workflowId), target: '_blank', rel: 'noopener', text: fromN8nio ? 'Open your imported copy' : 'Open the original' }) : null,
+        fromN8nio ? el('a', { class: 'btn', href: `https://n8n.io/workflows/${t.id}`, target: '_blank', rel: 'noopener noreferrer', text: 'View on n8n.io' }) : null,
         el('button', { class: 'btn', type: 'button', text: 'Copy workflow JSON', onclick: copyJson })),
+      fromN8nio ? el('p', { class: 'hint', text: `Stored from the n8n.io library${t.author ? `, by ${t.author}` : ''}. Written by the n8n community: read its Code and HTTP Request nodes before you run it. To remove it from this page, delete templates-api/library/${t.id}.json.` }) : null,
       diagramBox,
       t.needsCredentials.length ? el('div', {}, el('h3', { class: 'label', text: 'Connect before it runs' }),
         el('div', { class: 'meta-row' }, t.needsCredentials.map((a) => el('span', { class: 'tag', text: a })))) : null,
@@ -738,6 +746,28 @@
       const d = diagram(data.workflow || {}, t);
       diagramBox.replaceChildren(d || el('p', { class: 'empty', text: 'No nodes to draw.' }));
     }, () => diagramBox.replaceChildren(el('p', { class: 'empty', text: 'The diagram could not be loaded.' })));
+  }
+
+  // --- stored n8n.io templates ----------------------------------------------------
+  function reloadCatalog() {
+    return fetch('api/local/catalog').then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))).then((cat) => {
+      catalog = cat;
+      catName.clear();
+      prepare();
+      subtitle();
+      update();
+    });
+  }
+
+  // Runs alongside the import link, which opens the editor in a new tab.
+  function saveToLibrary(id) {
+    fetch(`api/local/library/${id}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+      .then((r) => r.json().then((d) => (r.ok ? d : Promise.reject(new Error(d.message || `HTTP ${r.status}`)))))
+      .then((d) => {
+        toast(d.stored ? `Imported, and “${d.name}” is now on this page under From n8n.io.` : 'Imported. It was already on this page.');
+        return reloadCatalog();
+      })
+      .catch((err) => toast(`Imported, but not stored on this page: ${err.message}.`));
   }
 
   // --- n8n.io library -------------------------------------------------------------
@@ -902,8 +932,9 @@
           const inWf = (wf.nodes || []).find((n) => n.type === t);
           return inWf ? inWf.name : t.split('.').pop();
         };
+        const stored = catalog.templates.find((t) => t.templateId === Number(id));
         const actions = el('div', { class: 'actions' });
-        const importLink = () => el('a', { class: 'btn primary', href: links.importTemplate(id), target: '_blank', rel: 'noopener', text: missing.length ? 'Import anyway' : 'Import into n8n' });
+        const importLink = () => el('a', { class: 'btn primary', href: links.importTemplate(id), target: '_blank', rel: 'noopener', text: missing.length ? 'Import anyway' : 'Import into n8n', onclick: () => saveToLibrary(id) });
         const fillActions = () => actions.replaceChildren(...[
           paid ? null : (missing.length
             ? el('button', { class: 'btn primary', type: 'button', text: 'Import into n8n…', onclick: confirmImport })
@@ -911,6 +942,7 @@
           paid ? null : el('a', { class: 'btn', href: links.template(id), target: '_blank', rel: 'noopener', text: 'Preview in n8n' }),
           el('a', { class: 'btn', href: `https://n8n.io/workflows/${id}`, target: '_blank', rel: 'noopener noreferrer', text: 'View on n8n.io' }),
           paid ? null : el('button', { class: 'btn', type: 'button', text: 'Copy workflow JSON', onclick: copyJson }),
+          stored ? el('button', { class: 'btn', type: 'button', text: 'Open in your templates', onclick: () => openTemplate(stored) }) : null,
         ].filter(Boolean));
         // A template with missing nodes imports, then fails with "Unrecognized node type": say so first.
         function confirmImport() {
@@ -941,7 +973,9 @@
           paid ? el('div', { class: 'notice' }, el('strong', { text: 'Paid template. ' }), 'Buy it on n8n.io; it cannot be imported from here.') : null,
           missing.length ? missingNotice(missing, nameOf) : null,
           actions,
-          el('p', { class: 'hint', text: 'Written by the n8n community. Import creates a new, inactive workflow; read its Code and HTTP Request nodes before you run it.' }),
+          el('p', { class: 'hint', text: stored
+            ? 'Written by the n8n community. Already on this page under From n8n.io. Import creates a new, inactive workflow; read its Code and HTTP Request nodes before you run it.'
+            : 'Written by the n8n community. Import creates a new, inactive workflow and keeps the template on this page under From n8n.io; read its Code and HTTP Request nodes before you run it.' }),
           diagramBox,
           el('div', {}, el('h3', { class: 'label', text: 'About' }), w.description ? markdown(w.description) : el('p', { class: 'empty', text: 'No description.' })),
         ].filter(Boolean));
@@ -978,9 +1012,13 @@
     }
   }
 
-  function start() {
+  function subtitle() {
     const host = new URL(EDITOR).host;
     $('#sub').textContent = `${ideaData.ideas.length} ideas to build with the Assistant and ${catalog.templates.length} templates from n8n at ${host}.`;
+  }
+
+  function start() {
+    subtitle();
     $('#link-editor').href = EDITOR;
     $('#link-assistant').href = links.assistant('');
 

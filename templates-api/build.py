@@ -21,6 +21,15 @@ with its icon, so the page can do the same for n8n.io templates.
 Each template is cleaned before it is served, because the gallery answers
 without a login: credentials, pinned data, static data, webhook ids and
 instance-specific settings are removed. Prints counts only, never contents.
+
+Workflows imported from the n8n.io library carry its template id
+(meta.templateId). Any such template not yet in templates-api/library/ is
+stored there through the running gallery server (TEMPLATES_URL, default
+http://127.0.0.1:5690), which then lists it with the local templates; that
+also refills the library after it is lost. data/imported.json maps each
+template id to the workflow imported from it, and data/node-meta.json holds
+the node metadata the server needs to describe stored templates. server.py
+imports describe() and clean() from this file.
 """
 
 import argparse
@@ -33,9 +42,12 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import urllib.error
+import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(ROOT, "templates-api", "data")
+LIBRARY = os.path.join(ROOT, "templates-api", "library")
 NODES_JSON = "/home/node/.cache/n8n/public/types/nodes.json"  # served to the editor as /types/nodes.json
 CATEGORY_PREFIX = "tpl: "
 ICONS = {"Gmail & Email": "✉️", "Discord": "💬", "Social Media": "📣", "Drive & Sheets": "📁", "OpenAI & LLMs": "✨"}
@@ -254,6 +266,67 @@ def card_nodes(type_counts, meta):
     return out
 
 
+def describe(cleaned, meta):
+    """What the gallery and the ideas page show about one cleaned workflow."""
+    counts = {}
+    for n in cleaned["nodes"]:
+        counts[n["type"]] = counts.get(n["type"], 0) + 1
+    apps = sorted({a for a in (app_name(t, meta) for t in counts) if a})
+    # From n8n's node definitions: templates arrive with their credentials stripped.
+    needs = sorted({a for a in (app_name(t, meta) for t in counts if meta.get(t, {}).get("needsCredential")) if a})
+    return {
+        "nodeCount": sum(1 for n in cleaned["nodes"] if n["type"] != "n8n-nodes-base.stickyNote"),
+        "nodeTypeCounts": counts,
+        "nodes": card_nodes(counts, meta),
+        "triggers": trigger_kinds(counts, meta),
+        "flow": flow(cleaned, meta),
+        "apps": apps,
+        "needsCredentials": needs,
+        "ai": any(t.startswith(LANGCHAIN) or "AI" in meta.get(t, {}).get("categories", []) for t in counts),
+        "missingNodes": sorted(t for t in counts if meta and t not in meta and t != "n8n-nodes-base.stickyNote"),
+    }
+
+
+def add_icon_paths(nodes, types):
+    """Point card nodes at the icons copied into data/icons/ (types: data/node-types.json)."""
+    for n in nodes:
+        t = types.get(n["name"], {})
+        for key in ("iconPath", "iconPathDark"):
+            if t.get(key):
+                n[key] = t[key]
+
+
+def template_id(wf):
+    """The n8n.io (or gallery) template a workflow was created from, as a string of digits, or ''."""
+    tid = str((wf.get("meta") or {}).get("templateId") or "")
+    return tid if tid.isdigit() else ""
+
+
+def store_imports(ids):
+    """Have the gallery server store these n8n.io templates in library/. Returns (stored, failed)."""
+    base = os.environ.get("TEMPLATES_URL", "http://127.0.0.1:5690").rstrip("/")
+    todo = [t for t in sorted(ids, key=int) if not os.path.exists(os.path.join(LIBRARY, f"{t}.json"))]
+    stored = failed = 0
+    for tid in todo:
+        req = urllib.request.Request(f"{base}/api/local/library/{tid}", data=b"{}", method="POST",
+                                     headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                stored += bool(json.load(r).get("stored"))
+        except urllib.error.HTTPError as exc:
+            failed += 1
+            try:
+                reason = json.load(exc).get("message", "")
+            except ValueError:
+                reason = ""
+            print(f"warning: template {tid} not stored (HTTP {exc.code}{': ' + reason if reason else ''})", file=sys.stderr)
+        except (urllib.error.URLError, OSError) as exc:
+            print(f"warning: gallery server unreachable at {base} ({type(exc).__name__}); "
+                  f"{len(todo) - stored - failed} imported templates not stored", file=sys.stderr)
+            return stored, len(todo) - stored
+    return stored, failed
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--export", help="existing n8nctl export folder (default: run ./n8nctl.sh export)")
@@ -266,15 +339,22 @@ def main():
         die(f"{src} not found; pass an n8nctl export folder")
     meta = node_metadata()
 
-    picked = []
+    picked, imported = [], {}
     for f in sorted(os.listdir(src)):
         if not f.endswith(".json"):
             continue
         with open(os.path.join(src, f), encoding="utf-8") as fh:
             wf = json.load(fh)
         tags = [t.get("name", "") for t in (wf.get("tags") or [])]
-        if args.tag in tags and not wf.get("isArchived"):
+        if wf.get("isArchived"):
+            continue
+        if args.tag in tags:
             picked.append((wf, tags))
+        elif template_id(wf):
+            # Created from a template: the newest such workflow is "your copy" of it.
+            prev = imported.get(template_id(wf))
+            if not prev or (wf.get("createdAt") or "") > prev[1]:
+                imported[template_id(wf)] = (wf["id"], wf.get("createdAt") or "")
     if not picked:
         die(f"no workflows tagged '{args.tag}' in {export}")
 
@@ -293,13 +373,7 @@ def main():
             die(f"template id collision for workflow {wf['id']}; rename or retag one of them")
         seen.add(tid)
         cleaned = clean(wf)
-        counts = {}
-        for n in cleaned["nodes"]:
-            counts[n["type"]] = counts.get(n["type"], 0) + 1
         cats = [cat_id[t[len(CATEGORY_PREFIX):]] for t in tags if t.startswith(CATEGORY_PREFIX)] or [cat_id["Other"]]
-        apps = sorted({a for a in (app_name(t, meta) for t in counts) if a})
-        # From n8n's node definitions: templates arrive with their credentials stripped.
-        needs = sorted({a for a in (app_name(t, meta) for t in counts if meta.get(t, {}).get("needsCredential")) if a})
         templates.append({
             "id": tid,
             "name": wf["name"],
@@ -307,16 +381,9 @@ def main():
             "createdAt": wf.get("createdAt") or "",
             "updatedAt": wf.get("updatedAt") or "",
             "categoryIds": cats,
-            "nodeCount": sum(1 for n in cleaned["nodes"] if n["type"] != "n8n-nodes-base.stickyNote"),
-            "nodeTypeCounts": counts,
-            "nodes": card_nodes(counts, meta),
             "workflowId": wf["id"],
-            "triggers": trigger_kinds(counts, meta),
-            "flow": flow(wf, meta),
-            "apps": apps,
-            "needsCredentials": needs,
-            "ai": any(t.startswith(LANGCHAIN) or "AI" in meta.get(t, {}).get("categories", []) for t in counts),
-            "missingNodes": sorted(t for t in counts if meta and t not in meta and t != "n8n-nodes-base.stickyNote"),
+            **({"templateId": int(template_id(wf))} if template_id(wf) else {}),
+            **describe(cleaned, meta),
         })
         with open(os.path.join(stage, "workflows", f"{tid}.json"), "w", encoding="utf-8") as fh:
             json.dump(cleaned, fh, ensure_ascii=False)
@@ -337,15 +404,12 @@ def main():
         }.items() if v}
     with open(os.path.join(stage, "node-types.json"), "w", encoding="utf-8") as fh:
         json.dump({"types": types}, fh, ensure_ascii=False)
+    with open(os.path.join(stage, "node-meta.json"), "w", encoding="utf-8") as fh:
+        json.dump(meta, fh, ensure_ascii=False)
+    with open(os.path.join(stage, "imported.json"), "w", encoding="utf-8") as fh:
+        json.dump({tid: wid for tid, (wid, _) in imported.items()}, fh)
     for t in templates:
-        for n in t["nodes"]:
-            url = n.get("iconUrl")
-            light = url.get("light") if isinstance(url, dict) else url
-            dark = url.get("dark") if isinstance(url, dict) else None
-            if light in copied:
-                n["iconPath"] = light
-            if dark in copied:
-                n["iconPathDark"] = dark
+        add_icon_paths(t["nodes"], types)
     with open(os.path.join(stage, "catalog.json"), "w", encoding="utf-8") as fh:
         json.dump({"categories": categories, "templates": templates}, fh, ensure_ascii=False)
 
@@ -357,7 +421,8 @@ def main():
             shutil.rmtree(old)
         if os.path.isdir(os.path.join(stage, sub_dir)):
             os.replace(os.path.join(stage, sub_dir), old)
-    os.replace(os.path.join(stage, "node-types.json"), os.path.join(OUT, "node-types.json"))
+    for name in ("node-types.json", "node-meta.json", "imported.json"):
+        os.replace(os.path.join(stage, name), os.path.join(OUT, name))
     os.replace(os.path.join(stage, "catalog.json"), os.path.join(OUT, "catalog.json"))
     shutil.rmtree(stage, ignore_errors=True)
     for dp, dirs, files in os.walk(OUT):
@@ -369,6 +434,13 @@ def main():
     for c in categories:
         print(f"  {c['name']}: {sum(c['id'] in t['categoryIds'] for t in templates)}")
     print(f"  node metadata: {'from n8n' if meta else 'unavailable'}; icons copied: {len(copied)} of {len(wanted)}")
+
+    # After the catalog, so the server checks new ids against it. Templates
+    # that came from the local gallery are local already.
+    stored, failed = store_imports(set(imported) - {str(t["id"]) for t in templates})
+    in_library = len([f for f in os.listdir(LIBRARY) if f.endswith(".json")]) if os.path.isdir(LIBRARY) else 0
+    print(f"  imported from n8n.io: {len(imported)} workflows; library: {in_library} templates"
+          f" ({stored} stored now{f', {failed} failed' if failed else ''})")
 
 
 if __name__ == "__main__":

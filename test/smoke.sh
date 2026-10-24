@@ -142,6 +142,53 @@ check_fails "export rejects arguments"               "$CTL" export --foo
 check_fails "export needs n8n running"               "$CTL" export
 "$CTL" start >/dev/null
 
+# --- chats (real chat script against a small SQLite file, if node has node:sqlite) ---
+export STUB_CHATS_DB="$WORK/chats.sqlite"
+CH="$N8N_BASE_DIR/chats"
+if node -e "require('node:sqlite')" 2>/dev/null; then
+  node - "$STUB_CHATS_DB" <<'JS'
+const { DatabaseSync } = require('node:sqlite');
+const db = new DatabaseSync(process.argv[2]);
+db.exec(`CREATE TABLE user (id TEXT PRIMARY KEY);
+  CREATE TABLE instance_ai_threads (id TEXT PRIMARY KEY, resourceId TEXT, title TEXT, metadata TEXT, createdAt TEXT, updatedAt TEXT);
+  CREATE TABLE instance_ai_messages (id TEXT PRIMARY KEY, threadId TEXT, content TEXT, role TEXT, createdAt TEXT);
+  INSERT INTO user VALUES ('u1');`);
+const t = db.prepare('INSERT INTO instance_ai_threads VALUES (?, ?, ?, ?, ?, ?)');
+t.run('aaaaaaaa-1111-4111-8111-111111111111', 'u1', 'First chat', '{"source":"assistant_page"}', '2026-10-01 10:00:00.000', '2026-10-02 10:00:00.000');
+t.run('bbbbbbbb-2222-4222-8222-222222222222', 'u1', 'Second chat', '{}', '2026-10-03 10:00:00.000', '2026-10-04 10:00:00.000');
+t.run('cccccccc-3333-4333-8333-333333333333', 'sub-agent:x', 'Sub-agent thread', '{}', '2026-10-05 10:00:00.000', '2026-10-05 10:00:00.000');
+const m = db.prepare('INSERT INTO instance_ai_messages VALUES (?, ?, ?, ?, ?)');
+const msg = (id, thread, role, parts, at) => m.run(id, thread, JSON.stringify({ id, role, content: parts }), role, at);
+msg('m1', 'aaaaaaaa-1111-4111-8111-111111111111', 'user', [{ type: 'text', text: '<thread-context>\nsecret context\n</thread-context>\n\nHello there\n\n<current-date-time>\nnow\n</current-date-time>' }], '2026-10-01 10:00:01.000');
+msg('m2', 'aaaaaaaa-1111-4111-8111-111111111111', 'assistant', [{ type: 'reasoning', text: 'thinking' }, { type: 'text', text: 'Hi! Done.' }, { type: 'tool-call', toolName: 'workflows', state: 'output-available' }], '2026-10-01 10:00:02.000');
+msg('m3', 'bbbbbbbb-2222-4222-8222-222222222222', 'user', [{ type: 'text', text: 'Second question' }], '2026-10-03 10:00:01.000');
+JS
+  check       "chats: lists users' chats"              bash -c "out=\$(\"$CTL\" chats) && grep -q 'First chat' <<<\"\$out\" && grep -q 'Second chat' <<<\"\$out\" && ! grep -q 'Sub-agent' <<<\"\$out\""
+  check       "chats pin"                              "$CTL" chats pin aaaaaaaa
+  check       "chats: pinned chat listed first with *"  bash -c "\"$CTL\" chats | sed -n 2p | grep -q '^ \* .*First chat'"
+  check       "chats pin keeps other metadata"         bash -c "node -e \"const d=new (require('node:sqlite').DatabaseSync)(process.argv[1]);const r=d.prepare(\\\"SELECT metadata,updatedAt FROM instance_ai_threads WHERE id LIKE 'aaaa%'\\\").get();const m=JSON.parse(r.metadata);process.exit(m.source==='assistant_page'&&m.n8nLocalPinned===true&&r.updatedAt==='2026-10-02 10:00:00.000'?0:1)\" '$STUB_CHATS_DB'"
+  check_fails "chats pin rejects a short id"           "$CTL" chats pin aaa
+  check       "chats save --pinned"                    "$CTL" chats save --pinned
+  check       "chats: only the pinned chat saved"      bash -c "ls '$CH' | grep -qx '2026-10-01-first-chat-aaaaaaaa.md' && [ \$(ls '$CH' | wc -l) -eq 1 ]"
+  check       "chats: dir is 700"                      test "$(perm "$CH")" = "drwx------"
+  check       "chats: file is 600"                     test "$(perm "$CH/2026-10-01-first-chat-aaaaaaaa.md")" = "-rw-------"
+  check       "chats: n8n's context blocks stripped"   bash -c "f='$CH/2026-10-01-first-chat-aaaaaaaa.md'; grep -qx 'Hello there' \"\$f\" && ! grep -q 'secret context\|current-date-time\|thinking' \"\$f\" && grep -q '_Tools: workflows_' \"\$f\""
+  check       "chats save (all)"                       bash -c "\"$CTL\" chats save && [ \$(ls '$CH' | wc -l) -eq 2 ]"
+  node -e "new (require('node:sqlite').DatabaseSync)(process.argv[1]).exec(\"UPDATE instance_ai_threads SET title='Renamed chat' WHERE id LIKE 'aaaa%'\")" "$STUB_CHATS_DB"
+  check       "chats: a renamed chat replaces its file" bash -c "\"$CTL\" chats save aaaaaaaa && ls '$CH' | grep -qx '2026-10-01-renamed-chat-aaaaaaaa.md' && [ \$(ls '$CH' | wc -l) -eq 2 ]"
+  check       "chats unpin"                            bash -c "\"$CTL\" chats unpin aaaaaaaa && ! \"$CTL\" chats | grep -q '^ \*'"
+  check       "chats: logged"                          bash -c "grep -q 'chats-save  path=.* chats=1 selection=--pinned' '$N8N_BASE_DIR/n8nctl.log' && grep -q 'chats-pin  ids=aaaaaaaa' '$N8N_BASE_DIR/n8nctl.log'"
+  check       "chats: container temp cleaned"          bash -c "! ls -d '$STUB_STATE'/container/tmp/n8nctl-chats-* 2>/dev/null | grep -q ."
+else
+  echo "skip chats checks: this node has no node:sqlite (needs Node 22.13+)"
+fi
+check       "chats: gitignore gained chats/"         bash -c "\"$CTL\" chats save --pinned && grep -qx 'chats/' '$N8N_BASE_DIR/.gitignore'"
+check_fails "chats: unknown subcommand"              "$CTL" chats bogus
+check_fails "chats pin needs an id"                  "$CTL" chats pin
+"$CTL" stop >/dev/null
+check_fails "chats need n8n running"                 "$CTL" chats
+"$CTL" start >/dev/null
+
 # Same-second snapshots (_2, _10) must sort after their base name in any locale.
 ORD="$WORK/order"
 for s in 20261015-230502_10 20261015-230502_2 20261015-230502 20261015-230501; do
@@ -229,6 +276,11 @@ mkdir -p "$WORK/ro" && chmod 500 "$WORK/ro"
 check       "nightly: failed backup is reported"     bash -c "N8N_BACKUP_DIR='$WORK/ro/b' \"$NIGHTLY\" | grep -q '^NOTIFY:n8n backup failed'"
 check       "nightly: no upgrade after a bad backup" bash -c "! N8N_BACKUP_DIR='$WORK/ro/b' \"$NIGHTLY\" | grep -q 'patch upgrade'"
 chmod 700 "$WORK/ro"
+printf "%s\n" "Problem with execution 1: There was a problem in 'Gmail trigger' node in workflow 'wf123': 'Access could not be refreshed because the refresh token expired.'" > "$STUB_STATE/n8n.log"
+check       "status: failing trigger reported"      bash -c "\"$CTL\" status 2>&1 | grep -q \"1x workflow wf123, node 'Gmail trigger': Access could not be refreshed\""
+check       "nightly: failing trigger notified"      bash -c "\"$NIGHTLY\" | grep -q '^NOTIFY:An n8n trigger kept failing'"
+rm -f "$STUB_STATE/n8n.log"
+check       "status: quiet triggers"                 bash -c "\"$CTL\" status 2>&1 | grep -q 'Triggers: no failing polls'"
 head -c 4194304 /dev/urandom > "$VOL/blob"
 check       "nightly: big growth is reported"        bash -c "\"$NIGHTLY\" | grep -q '^NOTIFY:The n8n backup grew'"
 rm -f "$VOL/blob"

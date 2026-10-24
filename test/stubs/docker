@@ -11,10 +11,24 @@ case "$1" in
       rm) rm -rf "${V:?}/${3:?}"; exit 0 ;;
     esac ;;
   exec)
-    # docker exec -u node <id> <cmd...>; container paths map to $STUB_STATE/container/...
-    shift; [[ "$1" == "-u" ]] && shift 2; shift   # drop -u node and the container id
+    # docker exec [-i] [-u node] <id> <cmd...>; container paths map to $STUB_STATE/container/...
+    shift
+    while [[ "$1" == -* ]]; do case "$1" in -u) shift 2 ;; *) shift ;; esac; done
+    shift   # the container id
     C="$STUB_STATE/container"
     case "$1" in
+      node)
+        # n8nctl chats: the real script (on stdin) against $STUB_CHATS_DB, when
+        # this machine's node has node:sqlite; otherwise an empty chat list.
+        shift
+        if [[ -n "${STUB_CHATS_DB:-}" ]] && node -e "require('node:sqlite')" 2>/dev/null; then
+          args=(); for a in "$@"; do args+=("${a/#\/tmp\//$C/tmp/}"); done
+          N8NCTL_CHATS_DB="$STUB_CHATS_DB" exec node "${args[@]}"
+        fi
+        cat >/dev/null
+        for a in "$@"; do [[ "$a" == /tmp/* ]] && mkdir -p "$C$a"; done
+        [[ " $* " == *" list "* ]] && echo "No Assistant chats."
+        exit 0 ;;
       n8n)
         out=""; sep=0
         for a in "$@"; do case "$a" in --output=*) out="${a#--output=}" ;; --separate) sep=1 ;; esac; done

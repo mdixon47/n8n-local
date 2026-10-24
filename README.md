@@ -329,6 +329,42 @@ workflows, check each node's credential field, then activate; imports arrive
 deactivated. Exported JSON can contain webhook paths and hard-coded values,
 so keep the folder out of git and out of chats. `N8N_EXPORT_DIR` moves it.
 
+## Saving and pinning Assistant chats
+
+n8n's AI Assistant has no pin or export of its own. Two ways to add them:
+
+- **In the Assistant** (from `templates-api/web/editor-hook.js`): on the
+  chat history page (**Chats**, **View all**), each chat has a 📌 pin button
+  and a ⤓ save button next to its ⋯ menu; pinned chats come first. The
+  sidebar's **Chats** section gets a **📌 Pinned** group, and, while a chat
+  is open, **Pin**/**Unpin** and **Save** for that chat. Save downloads the
+  chat as a Markdown file. A pin is stored on the chat itself (the
+  `n8nLocalPinned` flag in its metadata, set through n8n's own API), so it
+  shows on every device. Pinning through the API counts as an update, so the
+  chat also moves to the top of n8n's recent list. Reload open editor tabs to
+  pick up changes to the script.
+- **From the terminal:**
+
+```bash
+./n8nctl.sh chats                    # list, pinned (*) first, with ids
+./n8nctl.sh chats save               # every chat -> chats/<date>-<title>-<id>.md
+./n8nctl.sh chats save --pinned      # only pinned chats (the nightly job does this)
+./n8nctl.sh chats save 90b1f392      # one chat, by id or its first 6+ characters
+./n8nctl.sh chats pin 90b1f392       # pin / unpin without the browser
+```
+
+Both write the same Markdown: your messages and the Assistant's replies with
+timestamps, and the tools it used; its reasoning, tool inputs and outputs,
+and the context n8n adds to your messages behind the scenes are left out.
+`chats/` holds one file per chat (a re-save replaces it), is gitignored, and
+is readable only by you (700/600); `N8N_CHATS_DIR` moves it. The nightly job
+saves pinned chats there, so each pinned chat has a copy outside n8n's
+database. The terminal commands read the SQLite database inside the n8n
+container read-only; `pin`/`unpin` change only the chat's pin flag.
+
+Chats stay until you delete them: `N8N_INSTANCE_AI_THREAD_TTL_DAYS=0` in
+`n8n/.env` turns off n8n's default deletion of chats idle for 30 days.
+
 ## Local Templates gallery
 
 The editor's **Templates** link (sidebar, command bar, empty-canvas buttons)
@@ -389,6 +425,46 @@ library:
   template, and so does clicking such a link inside the editor. Each one is
   flagged when it needs a node this n8n does not have; paid templates link
   to n8n.io instead.
+- **Stored imports**: importing an n8n.io template also stores it, and it
+  stays among the local templates under the **From n8n.io** category (in
+  the editor's Templates page too), with a link to your imported copy once
+  `build.py` has run. See below.
+
+**Prompt generator** (`http://Maliks-Mac-Studio.local:5690/prompts`, linked
+from the ideas page header): a form for the workflow *AI Prompt Generator —
+Multi-Model Evaluation*. It POSTs `{"goal": …}` to the workflow's production
+webhook, `http://<host>:5678/webhook/ai-prompt-generator`, and shows the
+three versions it answers with, each more refined than the last (`choices`:
+1 the evaluator's pick, 2 sharpened by *Refiner 2*, 3 made production-ready
+by *Refiner 3*), each with Copy and Send to the Assistant, plus Run again.
+`best_prompt` in the answer is still version 1. Undo the refiners with
+`docker exec -u node n8n-n8n-1 n8n publish:workflow --id=aY4Q1DmIxBDcsVpW
+--versionId=20930c8a-c26f-49c6-a97e-fda31e7b7033`, then restart n8n.
+Recent results stay in that browser only. The browser calls n8n directly: the
+webhook answers CORS for this origin, and the page's CSP allows connections to
+port 5678 only. Each run calls six models on your keys and writes to the
+Supabase table `prompts` (create it with `examples/supabase-prompts.sql`).
+Opening the webhook URL itself in a browser fails: browsers send `GET`.
+
+**Stored n8n.io templates.** Every import of an n8n.io template is stored
+and stays on the Templates page: **Import into n8n** (or **Import anyway**)
+on the ideas page, and inside the editor **Use template** on a template's
+page, with or without the credential setup step (`editor-hook.js` reports
+those, see below). Storing means the gallery server fetches it from n8n.io by id,
+strips credentials and webhook ids like `build.py` does, and writes
+`templates-api/library/<id>.json`. That folder is the service's only
+writable mount (`TEMPLATES_LIBRARY_DIR` in `n8n/compose.override.yml`),
+holds at most 500 templates, and is gitignored: the templates are n8n.io
+community content and this repo is public. Stored templates import from
+the stored copy, so they keep working with `TEMPLATES_UPSTREAM` off. One
+that a workflow tagged `template` came from is not listed twice. To remove
+one from the page, delete its file. `build.py` stores any n8n.io template a
+workflow here was imported from and the library lacks (n8n records the id
+as the workflow's `meta.templateId`), so imports made elsewhere, and a lost
+`library/` folder, are filled in on the next build. The store request is
+accepted only from the ideas page and the editor: it needs a JSON body,
+which makes other sites' requests preflight, and preflights allow `POST`
+only for the editor's origin and only on that path.
 
 How n8n.io imports work: the gallery server passes n8n.io's API through
 (`TEMPLATES_UPSTREAM` in `n8n/compose.override.yml`, default
@@ -412,7 +488,12 @@ How the link is redirected: `EXTERNAL_FRONTEND_HOOKS_URLS` in
 `n8n/compose.override.yml` makes n8n add `templates-api/web/editor-hook.js`
 to the editor page. The script rewrites links to `n8n.io/workflows`, and
 types a prompt into the Assistant only when the tab was opened from the
-ideas page. It makes no network requests. To turn it off, remove that line
+ideas page. When a workflow is created from a template in the editor, it
+sends the template id (nothing else, no cookies) to the gallery server to
+store it; it learns of that from n8n's `template.open` and
+`workflow.afterUpdate` hooks and from the move from `/templates/<id>/setup`
+to the new workflow. That is its only network request. Reload open editor
+tabs after changing it. To turn it off, remove that line
 and run `./n8nctl.sh start`. Rebuild with `build.py` as above; it also copies
 the node icons into `templates-api/data/icons/`.
 
@@ -655,7 +736,8 @@ volumes exist, set `N8N_VOLUME` to the right one.
 │   ├── server.py             # local Templates gallery API + ideas page (compose service templates-api)
 │   ├── build.py              # export -> data/ from workflows tagged `template`
 │   ├── web/                  # ideas page (index.html, app.js, app.css, ideas.json) + editor-hook.js
-│   └── data/                 # generated by build.py (gitignored): catalog, workflows, icons
+│   ├── data/                 # generated by build.py (gitignored): catalog, workflows, icons
+│   └── library/              # n8n.io templates stored on import (gitignored; written by server.py)
 ├── test/
 │   ├── smoke.sh              # offline checks for every command
 │   ├── stubs/docker, curl    # fake docker and curl used by the test
@@ -692,6 +774,7 @@ Log line format:
 | `N8N_BACKUP_DIR` | Backup destination | `$N8N_BASE_DIR/n8n-backups` |
 | `N8N_VOLUME` | Data volume name | auto-detect `*n8n-data` |
 | `N8N_EXPORT_DIR` | Workflow export destination | `$N8N_BASE_DIR/exports` |
+| `N8N_CHATS_DIR` | Saved Assistant chats (`chats save`) | `$N8N_BASE_DIR/chats` |
 
 n8n variables this setup touches, all set in `n8n/.env` and applied with
 `./n8nctl.sh start`:

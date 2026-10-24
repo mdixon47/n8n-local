@@ -9,6 +9,11 @@
 #      about a minute when there is one)
 #   3. check-update, to hear about new minor and major versions, which are
 #      upgraded by hand
+#   4. save the pinned AI Assistant chats as Markdown in chats/ (one file per
+#      chat, replaced each night), so each has a copy outside the database
+#   5. tell when a trigger kept failing in the last 24 hours: a failing poll
+#      (an expired Gmail credential, say) records no execution, so nothing
+#      else shows it
 # Everything goes to ~/Library/Logs/n8nctl-backup.log. Lines on stdout that
 # start with "NOTIFY:" are shown by the app as macOS notifications. Always
 # exits 0: outcomes travel as notifications, not exit codes.
@@ -64,6 +69,18 @@ if (( rc == 3 )) && ! grep -q 'patch release(s) behind' <<<"$out"; then
     notify "n8n $latest is available. Read the release notes, then ./n8nctl.sh upgrade --version $latest"
     printf '%s\n' "$latest" >"$STATE/notified"
   fi
+fi
+
+# 4. pinned Assistant chats -> chats/ (n8n must be up; quiet unless it fails)
+if ! ./n8nctl.sh chats save --pinned >>"$LOG" 2>&1; then
+  notify "Saving the pinned n8n Assistant chats failed. Details in the log"
+fi
+
+# 5. failing triggers (from n8n's log, via status)
+out="$(./n8nctl.sh status 2>&1)"
+if grep -q 'Triggers failing' <<<"$out"; then
+  printf '%s\n' "$out" | grep -A20 'Triggers failing' | grep '^! ' >>"$LOG"
+  notify "An n8n trigger kept failing today, often an expired credential. Run ./n8nctl.sh status"
 fi
 
 echo "=== $(stamp) nightly: done" >>"$LOG"

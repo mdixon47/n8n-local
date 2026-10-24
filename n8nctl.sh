@@ -17,7 +17,7 @@
 # Usage: ./n8nctl.sh <command> [options]    (see ./n8nctl.sh help)
 set -euo pipefail
 
-N8NCTL_VERSION="1.6.2"
+N8NCTL_VERSION="1.7.0"
 INSTALLER_URL="https://get.n8n.io"
 # Newest 100 releases. "latest" alone is not enough: n8n also publishes 1.x
 # maintenance releases, and betas are marked prerelease.
@@ -36,6 +36,7 @@ N8N_BASE_DIR="${N8N_BASE_DIR:-$PWD}"
 N8N_DIR="$N8N_BASE_DIR/n8n"
 N8N_BACKUP_DIR="${N8N_BACKUP_DIR:-$N8N_BASE_DIR/n8n-backups}"
 N8N_EXPORT_DIR="${N8N_EXPORT_DIR:-$N8N_BASE_DIR/exports}"
+N8N_CHATS_DIR="${N8N_CHATS_DIR:-$N8N_BASE_DIR/chats}"
 LOG_FILE="$N8N_BASE_DIR/n8nctl.log"
 GITIGNORE_FILE="$N8N_BASE_DIR/.gitignore"
 
@@ -319,6 +320,25 @@ check_runtime() {
   return "$bad"
 }
 
+# A polling trigger that fails (an expired OAuth credential, say) records no
+# execution, so the executions list and Insights only show fewer runs; the
+# reason is only in n8n's log. Count those lines per workflow and node over
+# the last 24 hours. Separate from check_runtime: upgrades must not fail on it.
+check_triggers() {
+  local lines n rest
+  lines="$(compose logs --no-color --no-log-prefix --since 24h n8n 2>/dev/null |
+    sed -n "s/.*There was a problem in '\([^']*\)' node in workflow '\([^']*\)': '\(.\{0,90\}\).*/workflow \2, node '\1': \3/p" |
+    sort | uniq -c | sort -rn || true)"
+  if [[ -z "$lines" ]]; then
+    ok "Triggers: no failing polls in the last 24 h"
+    return 0
+  fi
+  warn "Triggers failing in the last 24 h, with no execution recorded (often a credential to reconnect):"
+  while read -r n rest; do warn "  ${n}x $rest"; done <<<"$lines"
+  warn "  Open http://localhost:$N8N_PORT/workflow/<id> to see which credential the node uses"
+  return 1
+}
+
 # Data volume: N8N_VOLUME overrides; otherwise the single volume named *n8n-data,
 # preferring the one compose derives from the install directory name.
 detect_volume() {
@@ -368,19 +388,19 @@ env_unset() {
 
 ensure_gitignore() {
   local entry changed=0
-  for entry in "n8n/" "n8n-backups/" "n8nctl.log" "exports/"; do
+  for entry in "n8n/" "n8n-backups/" "n8nctl.log" "exports/" "chats/"; do
     if ! grep -qxF "$entry" "$GITIGNORE_FILE" 2>/dev/null; then
       printf '%s\n' "$entry" >>"$GITIGNORE_FILE"
       changed=1
     fi
   done
-  (( changed )) && ok "Added missing entries to .gitignore (n8n/, n8n-backups/, n8nctl.log, exports/)"
+  (( changed )) && ok "Added missing entries to .gitignore (n8n/, n8n-backups/, n8nctl.log, exports/, chats/)"
   return 0
 }
 
 gitignore_ok() {
   local entry
-  for entry in "n8n/" "n8n-backups/" "n8nctl.log" "exports/"; do
+  for entry in "n8n/" "n8n-backups/" "n8nctl.log" "exports/" "chats/"; do
     grep -qxF "$entry" "$GITIGNORE_FILE" 2>/dev/null || return 1
   done
 }
@@ -591,9 +611,9 @@ cmd_preflight() {
   fi
 
   if gitignore_ok; then
-    ok ".gitignore covers n8n/, n8n-backups/, n8nctl.log, exports/"
+    ok ".gitignore covers n8n/, n8n-backups/, n8nctl.log, exports/, chats/"
   else
-    warn ".gitignore is missing entries (install fixes this; or add n8n/, n8n-backups/, n8nctl.log, exports/)"
+    warn ".gitignore is missing entries (install fixes this; or add n8n/, n8n-backups/, n8nctl.log, exports/, chats/)"
   fi
   say "Free space: $(df -h "$N8N_BASE_DIR" | awk 'NR==2{print $4}') on $(df -h "$N8N_BASE_DIR" | awk 'NR==2{print $1}')"
   warn "Port $N8N_PORT is published to all interfaces. On anything but a personal machine, put a firewall or a TLS reverse proxy in front."
@@ -995,7 +1015,7 @@ cmd_status() {
   fi
   env_is_set DAYTONA_API_KEY && say "Daytona:    key on file (DAYTONA_API_KEY)"
   [[ -f "$N8N_DIR/compose.override.yml" ]] && say "Override:   compose.override.yml present"
-  gitignore_ok || warn ".gitignore is missing n8n/, n8n-backups/, n8nctl.log or exports/"
+  gitignore_ok || warn ".gitignore is missing n8n/, n8n-backups/, n8nctl.log, exports/ or chats/"
 
   if docker info >/dev/null 2>&1; then
     if vol="$(detect_volume 2>/dev/null)"; then say "Volume:     $vol"; else say "Volume:     not created yet"; fi
@@ -1007,7 +1027,7 @@ cmd_status() {
     else
       warn "Not answering on http://localhost:$N8N_PORT/healthz"
     fi
-    n8n_running && { check_runtime || true; }
+    n8n_running && { check_runtime || true; check_triggers || true; }
   else
     warn "Docker daemon not reachable; container state unknown"
   fi
@@ -1094,6 +1114,158 @@ EOF
   ok "Exported $n workflow(s) to $dest"
   say "  workflows/*.json      import one at a time in the n8n UI"
   say "  all-workflows.json    for the n8n CLI importer"
+}
+
+# ---------------------------------------------------------------------------
+# AI Assistant chats: list, save as Markdown, pin
+# ---------------------------------------------------------------------------
+# A pin is the flag n8nLocalPinned in the chat's metadata, the same one
+# templates-api/web/editor-hook.js sets from the Assistant's chat history page.
+# The script runs inside the n8n container (Node's built-in node:sqlite) and
+# reads the SQLite database read-only, except for pin/unpin, which change that
+# one metadata field and nothing else (not even the chat's last-active time).
+chats_script() {
+  cat <<'JS'
+'use strict';
+const fs = require('node:fs');
+let sqlite;
+try { sqlite = require('node:sqlite'); } catch (e) { console.error('this n8n image has no node:sqlite (needs Node 22.13 or newer)'); process.exit(2); }
+const DB = process.env.N8NCTL_CHATS_DB || '/home/node/.n8n/database.sqlite';  // tests point it elsewhere
+if (!fs.existsSync(DB)) { console.error(`no SQLite database at ${DB}; only SQLite installs are supported`); process.exit(2); }
+const PIN = 'n8nLocalPinned';
+const [mode, outDir, ...args] = process.argv.slice(2);
+const db = new sqlite.DatabaseSync(DB, { readOnly: mode === 'list' || mode === 'save' });
+db.exec('PRAGMA busy_timeout = 5000');
+
+const meta = (t) => { try { return JSON.parse(t.metadata || '{}') || {}; } catch (e) { return {}; } };
+// Users' own chats only (sub-agent threads belong to a thread, not a user).
+const threads = db.prepare(`SELECT t.id, t.title, t.metadata, t.createdAt, t.updatedAt,
+    (SELECT COUNT(*) FROM instance_ai_messages m WHERE m.threadId = t.id) AS n
+  FROM instance_ai_threads t WHERE t.resourceId IN (SELECT id FROM user) ORDER BY t.updatedAt DESC`).all()
+  .map((t) => Object.assign(t, { pinned: meta(t)[PIN] === true, title: t.title || 'Untitled chat' }));
+const when = (v) => String(v || '').replace('T', ' ').slice(0, 16);
+
+function pick() {
+  if (args.includes('--all')) return threads;
+  if (args.includes('--pinned')) return threads.filter((t) => t.pinned);
+  return args.map((a) => {
+    const hits = a.length >= 6 ? threads.filter((t) => t.id.startsWith(a)) : [];
+    if (hits.length !== 1) { console.error(`${a}: ${hits.length ? 'matches more than one chat' : 'no such chat (use at least 6 characters of its id)'}`); process.exit(3); }
+    return hits[0];
+  });
+}
+
+// n8n wraps what you type in context blocks it hides in its own UI; strip them
+// the same way (cleanStoredUserMessage in n8n's instance-ai internal-messages.js).
+const LEADING = /^(?:<thread-context>\n[\s\S]*?\n<\/thread-context>|<running-tasks>\n[\s\S]*?\n<\/running-tasks>|<planned-task-follow-up[\s\S]*?\n<\/planned-task-follow-up>|<planning-blueprint>\n[\s\S]*?\n<\/planning-blueprint>|<background-task-completed>\n[\s\S]*?\n<\/background-task-completed>|<workflow-verification-follow-up>\n[\s\S]*?\n<\/workflow-verification-follow-up>|<workflow-setup-required>\n[\s\S]*?\n<\/workflow-setup-required>|<workflow-setup-state>\n[\s\S]*?\n<\/workflow-setup-state>|<workflow-test-request>\n[\s\S]*?\n<\/workflow-test-request>|<editor-context>\n[\s\S]*?\n<\/editor-context>|<credential-context>\n[\s\S]*?\n<\/credential-context>|<agent-preview-context>\n[\s\S]*?\n<\/agent-preview-context>|<instance-context>\n[\s\S]*?\n<\/instance-context>|<thread-artifacts>\n[\s\S]*?\n<\/thread-artifacts>)(?:\n\n|$)/;
+const TRAILING = ['current-date-time', 'project-context', 'past-conversations', 'ai-preferences', 'onboarding-answer']
+  .map((tag) => new RegExp(`(?<!\\n)\\n*<${tag}>(?:(?!<${tag}>)[\\s\\S])*?</${tag}>\\s*$`));
+function cleanUserText(text) {
+  let prev;
+  do { prev = text; for (const re of TRAILING) text = text.replace(re, ''); } while (text !== prev);
+  do { prev = text; text = text.replace(LEADING, ''); } while (text !== prev);
+  return text.trim() === '(continue)' ? '' : text;
+}
+
+// Same layout as the Save button in editor-hook.js.
+function slug(s) { return s.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'chat'; }
+function fileName(t) { return `${when(t.createdAt).slice(0, 10)}-${slug(t.title)}-${t.id.slice(0, 8)}.md`; }
+function markdown(t, messages) {
+  const out = [`# ${t.title}`, '',
+    `Chat with the n8n AI Assistant. Started ${when(t.createdAt)} UTC, last active ${when(t.updatedAt)} UTC, ${messages.length} messages. Chat id ${t.id}.`,
+    `Saved ${when(new Date().toISOString())} UTC. The Assistant's reasoning and its tools' inputs and outputs are left out.`];
+  for (const m of messages) {
+    const parts = Array.isArray(m.content) ? m.content : typeof m.content === 'string' ? [{ type: 'text', text: m.content }] : [];
+    const text = parts.filter((p) => p && p.type === 'text' && p.text)
+      .map((p) => (m.role === 'user' ? cleanUserText(p.text) : p.text).trim()).filter(Boolean).join('\n\n');
+    const tools = parts.filter((p) => p && p.type === 'tool-call').map((p) => p.toolName + (p.error || p.state === 'output-error' ? ' (failed)' : ''));
+    if (!text && !tools.length) continue;
+    out.push('', `### ${m.role === 'user' ? 'You' : 'Assistant'} · ${when(m.createdAt)}`, '');
+    if (text) out.push(text);
+    if (tools.length) out.push((text ? '\n' : '') + `_Tools: ${tools.join(', ')}_`);
+  }
+  return out.join('\n') + '\n';
+}
+
+if (mode === 'list') {
+  if (!threads.length) { console.log('No Assistant chats.'); process.exit(0); }
+  console.log('PIN  LAST ACTIVE       MSGS  ID        TITLE');
+  for (const t of [...threads.filter((x) => x.pinned), ...threads.filter((x) => !x.pinned)]) {
+    console.log(`${t.pinned ? ' * ' : '   '}  ${when(t.updatedAt)}  ${String(t.n).padStart(4)}  ${t.id.slice(0, 8)}  ${t.title.slice(0, 70)}`);
+  }
+} else if (mode === 'save') {
+  fs.mkdirSync(outDir, { recursive: true });
+  const rows = db.prepare('SELECT content, createdAt FROM instance_ai_messages WHERE threadId = ? ORDER BY createdAt, id');
+  for (const t of pick()) {
+    const messages = rows.all(t.id).map((r) => {
+      let c; try { c = JSON.parse(r.content); } catch (e) { c = {}; }
+      return { role: c.role, content: c.content, createdAt: r.createdAt };
+    });
+    fs.writeFileSync(`${outDir}/${fileName(t)}`, markdown(t, messages));
+  }
+} else if (mode === 'pin' || mode === 'unpin') {
+  const set = db.prepare('UPDATE instance_ai_threads SET metadata = ? WHERE id = ?');
+  for (const t of pick()) {
+    const m = meta(t);
+    if (mode === 'pin') m[PIN] = true; else delete m[PIN];
+    set.run(JSON.stringify(m), t.id);
+    console.log(`${mode === 'pin' ? 'Pinned' : 'Unpinned'} ${t.id.slice(0, 8)}  ${t.title.slice(0, 70)}`);
+  }
+} else {
+  console.error(`unknown mode ${mode}`); process.exit(2);
+}
+JS
+}
+
+# chats_run <mode> <container dir> [args...]: run chats_script in the n8n container.
+chats_run() {
+  local cid
+  cid="$(compose ps -q --status running n8n 2>/dev/null)"
+  [[ -n "$cid" ]] || die "n8n is not running; start it first ('./n8nctl.sh start')"
+  chats_script | docker exec -i -u node "$cid" node --no-warnings - "$@"
+}
+
+cmd_chats() {
+  local sub="${1:-list}" cid ts ctmp f id8 old n=0
+  [[ $# -gt 0 ]] && shift
+  require_install
+  check_docker
+  case "$sub" in
+    list)
+      [[ $# -eq 0 ]] || die "chats list takes no arguments"
+      chats_run list - ;;
+    save)
+      [[ $# -gt 0 ]] || set -- --all
+      cid="$(compose ps -q --status running n8n 2>/dev/null)"
+      [[ -n "$cid" ]] || die "n8n is not running; start it first ('./n8nctl.sh start')"
+      ts="$(date -u +%Y%m%d-%H%M%S)"
+      ctmp="/tmp/n8nctl-chats-$ts"
+      chats_run save "$ctmp" "$@" || die "saving chats failed"
+      TMP_DIR="$(mktemp -d)"
+      docker cp "$cid:$ctmp/." "$TMP_DIR/" >/dev/null || die "copying the chats out of the container failed"
+      docker exec -u node "$cid" rm -rf "$ctmp" >/dev/null 2>&1 || true
+      ensure_gitignore
+      mkdir -p "$N8N_CHATS_DIR"
+      chmod 700 "$N8N_CHATS_DIR"
+      for f in "$TMP_DIR"/*.md; do
+        [[ -f "$f" ]] || continue
+        # One file per chat: drop an older copy saved under a previous title.
+        id8="${f%.md}"; id8="${id8##*-}"
+        for old in "$N8N_CHATS_DIR"/*-"$id8".md; do
+          [[ -f "$old" && "$(basename "$old")" != "$(basename "$f")" ]] && rm -f "$old"
+        done
+        mv -f "$f" "$N8N_CHATS_DIR/"
+        chmod 600 "$N8N_CHATS_DIR/$(basename "$f")"
+        n=$((n + 1))
+      done
+      log "chats-save  path=$N8N_CHATS_DIR chats=$n selection=$*"
+      ok "Saved $n chat(s) as Markdown in $N8N_CHATS_DIR" ;;
+    pin|unpin)
+      [[ $# -gt 0 ]] || die "usage: ./n8nctl.sh chats $sub <id> [<id>...] (ids from './n8nctl.sh chats')"
+      chats_run "$sub" - "$@" || die "chats $sub failed"
+      log "chats-$sub  ids=$*" ;;
+    *) die "unknown chats command '$sub' (list, save, pin, unpin)" ;;
+  esac
 }
 
 # Snapshot directories, oldest first. Names are UTC timestamps (plus an
@@ -1345,6 +1517,9 @@ Commands
   start | stop | logs [service]  Run the stack / stop it (data kept) / follow logs
   backup                         Snapshot data volume + .env + compose files (brief n8n pause)
   export                         Write every workflow as JSON to exports/<timestamp>/ (no credentials)
+  chats                          List AI Assistant chats, pinned (*) first
+  chats save [--pinned | ID...]  Save chats as Markdown to chats/ (all by default; one file per chat)
+  chats pin|unpin ID...          Pin a chat (also from the Assistant's chat history page)
   backups [--prune N]            List snapshots; --prune keeps only the newest N
   verify <dir>                   Check a snapshot: files, sha256, versions, tarball
   restore <dir>                  Roll back to a snapshot (takes a pre-restore backup first)
@@ -1363,6 +1538,7 @@ Environment
   N8N_BASE_DIR         Directory containing ./n8n            (default: \$PWD)
   N8N_BACKUP_DIR       Backup destination                    (default: \$N8N_BASE_DIR/n8n-backups)
   N8N_EXPORT_DIR       Workflow export destination           (default: \$N8N_BASE_DIR/exports)
+  N8N_CHATS_DIR        Saved Assistant chats                 (default: \$N8N_BASE_DIR/chats)
   N8N_VOLUME           Data volume name                      (default: auto-detect *n8n-data)
 
 Log: n8nctl.log next to the script (installer hashes, installs, upgrades, backups).
@@ -1399,6 +1575,7 @@ main() {
     logs)      cmd_logs "$@" ;;
     backup)    cmd_backup "$@" ;;
     export)    cmd_export "$@" ;;
+    chats)     cmd_chats "$@" ;;
     backups)   cmd_backups "$@" ;;
     verify)    cmd_verify "$@" ;;
     restore)   cmd_restore "$@" ;;
