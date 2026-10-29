@@ -14,7 +14,7 @@
     <div class="wrap narrow top-row">
       <div class="brand">
         <h1>Prompt generator</h1>
-        <p class="sub">Three AI agents each write a prompt for your goal, a fourth picks the best, and two more passes refine it. You get three versions, each more refined than the last.</p>
+        <p class="sub">Describe your goal, clarify the brief in a few questions, then get three versions of the prompt, each more refined than the last.</p>
       </div>
       <nav class="top-links" aria-label="Pages">
         <a href="./">Workflow ideas</a>
@@ -24,6 +24,12 @@
   </header>
 
   <main class="wrap narrow">
+    <ol class="steps" id="steps" aria-label="Steps">
+      <li data-step="1"><span class="n">1</span> Goal</li>
+      <li data-step="2"><span class="n">2</span> Clarify the brief</li>
+      <li data-step="3"><span class="n">3</span> Three versions</li>
+    </ol>
+
     <form class="panel" id="form" novalidate>
       <label class="field-label" for="goal">What should the prompt achieve?</label>
       <textarea id="goal" rows="4" maxlength="4000" spellcheck="true"
@@ -31,16 +37,33 @@
       <div class="examples" id="examples" aria-label="Example goals"></div>
       <div class="form-foot">
         <span class="hint" id="count">0 / 4000</span>
-        <span class="hint keys" aria-hidden="true"><kbd>⌘</kbd><kbd>↵</kbd> to generate</span>
-        <button class="btn primary" id="go" type="submit">Generate prompt</button>
+        <span class="hint keys" aria-hidden="true"><kbd>⌘</kbd><kbd>↵</kbd> to continue</span>
+        <button class="btn primary" id="go" type="submit">Clarify the brief</button>
       </div>
     </form>
+
+    <section class="panel brief" id="brief" hidden aria-labelledby="brief-h">
+      <p class="eyebrow" id="brief-h">Clarify the brief</p>
+      <p class="brief-summary" id="brief-summary"></p>
+      <p class="hint">Answer what matters to you. Anything you leave blank, the AI decides.</p>
+      <p class="hint fallback-note" id="brief-fallback" hidden>These are general questions: the clarifier could not tailor them to this goal this time.</p>
+      <div class="questions" id="questions"></div>
+      <details class="preview">
+        <summary>Your brief, exactly as the agents will get it</summary>
+        <pre class="code" id="brief-preview"></pre>
+      </details>
+      <div class="form-foot">
+        <button class="btn" id="edit-goal" type="button">Edit the goal</button>
+        <span class="hint keys" aria-hidden="true"><kbd>⌘</kbd><kbd>↵</kbd> to generate</span>
+        <button class="btn primary" id="generate" type="button">Generate 3 versions</button>
+      </div>
+    </section>
 
     <section class="panel status" id="status" hidden aria-live="polite">
       <div class="spinner" aria-hidden="true"></div>
       <div class="status-text">
-        <p class="status-title">Generating… <span id="elapsed">0 s</span></p>
-        <p class="hint">Creative, marketing and technical agents draft in parallel, an evaluator picks the best, then two passes refine it. Usually 30 to 90 seconds.</p>
+        <p class="status-title"><span id="status-title">Generating…</span> <span id="elapsed">0 s</span></p>
+        <p class="hint" id="status-hint"></p>
       </div>
       <button class="btn" id="cancel" type="button">Cancel</button>
     </section>
@@ -59,8 +82,13 @@
         </div>
         <span class="tag" id="result-meta"></span>
       </div>
+      <details class="preview result-brief">
+        <summary>Brief used</summary>
+        <pre class="code" id="result-brief"></pre>
+      </details>
       <div class="choices" id="choices"></div>
       <div class="result-foot">
+        <button class="btn" id="adjust" type="button">Adjust the brief</button>
         <button class="btn" id="again" type="button">Run again</button>
         <p class="hint">The workflow also writes version 1, the evaluator's pick, to the Supabase table <code>prompts</code>.</p>
       </div>
@@ -77,19 +105,20 @@
 
     <details class="panel how">
       <summary>How it works, and calling it from Postman or curl</summary>
-      <p>This page sends your goal to the n8n workflow <strong>AI Prompt Generator — Multi-Model Evaluation</strong>
-        as a <code>POST</code> to its production webhook. A plain browser visit to that URL fails, because browsers send <code>GET</code>.</p>
+      <p>This page talks to the n8n workflow <strong>AI Prompt Generator — Multi-Model Evaluation</strong>
+        through <code>POST</code> requests to its production webhook. A plain browser visit to that URL fails, because browsers send <code>GET</code>.</p>
       <ol>
-        <li>Three agents each draft a prompt: creative (Gemini), marketing (DeepSeek through OpenRouter), technical (GPT-OSS on Groq).</li>
-        <li>An evaluator (Gemini) compares them against your goal and keeps the winner word for word: version 1, <em>Refined</em>.</li>
+        <li>A clarifier (Gemini) reads your goal and asks the 3 to 5 questions that would change the result most, with suggested answers (<code>"mode": "clarify"</code>; nothing is saved).</li>
+        <li>Your goal and answers become the creative brief. Three agents each draft a prompt from it: creative (Gemini), marketing (DeepSeek through OpenRouter), technical (GPT-OSS on Groq).</li>
+        <li>An evaluator (Gemini) compares them against the brief and keeps the winner word for word: version 1, <em>Refined</em>.</li>
         <li>A refiner sharpens it: role, audience, constraints and output format spelled out. Version 2, <em>More refined</em>.</li>
         <li>A second refiner makes that production-ready: context, steps, quality criteria, edge cases, an example. Version 3, <em>Most refined</em>.</li>
-        <li>The workflow answers with <code>{"goal", "best_prompt", "choices": [{"level", "label", "prompt"} ×3]}</code> and saves the goal and version 1 to Supabase.</li>
+        <li>The workflow answers with <code>{"goal", "brief", "best_prompt", "choices": [{"level", "label", "prompt"} ×3]}</code> and saves the goal and version 1 to Supabase.</li>
       </ol>
-      <p>Each run calls six models on your own API keys. The workflow must be published for the webhook to answer.</p>
-      <p class="field-label">Same request from a terminal</p>
+      <p>Clarifying calls one model; generating calls six, on your own API keys. A request without <code>mode</code> generates straight from the goal, as before. The workflow must be published for the webhook to answer.</p>
+      <p class="field-label">Same requests from a terminal</p>
       <pre class="code" id="curl"></pre>
-      <p class="hint">In Postman or Insomnia: method <code>POST</code>, that URL, body type JSON, with a <code>goal</code> field.</p>
+      <p class="hint">In Postman or Insomnia: method <code>POST</code>, that URL, body type JSON, with the fields above.</p>
     </details>
   </main>
 

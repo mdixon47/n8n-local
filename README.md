@@ -432,17 +432,26 @@ library:
 
 **Prompt generator** (`http://Maliks-Mac-Studio.local:5690/prompts`, linked
 from the ideas page header): a form for the workflow *AI Prompt Generator —
-Multi-Model Evaluation*. It POSTs `{"goal": …}` to the workflow's production
-webhook, `http://<host>:5678/webhook/ai-prompt-generator`, and shows the
+Multi-Model Evaluation*, in three steps. It clarifies the creative brief
+before generating: `{"mode": "clarify", "goal"}` to the workflow's production
+webhook, `http://<host>:5678/webhook/ai-prompt-generator`, returns 3 to 5
+questions with suggested answers (a *Clarifier* step; general questions if
+its JSON is unusable). Your answers, blank ones skipped, become the brief:
+`{"mode": "generate", "goal", "answers": [{"question", "answer"}]}`; every
+agent, the evaluator and both refiners work from it, and the answer includes
+it as `brief`. A request without `mode` generates from the goal alone, as
+before. The page shows the brief as it will be sent, then the
 three versions it answers with, each more refined than the last (`choices`:
 1 the evaluator's pick, 2 sharpened by *Refiner 2*, 3 made production-ready
-by *Refiner 3*), each with Copy and Send to the Assistant, plus Run again.
-`best_prompt` in the answer is still version 1. Undo the refiners with
-`docker exec -u node n8n-n8n-1 n8n publish:workflow --id=aY4Q1DmIxBDcsVpW
---versionId=20930c8a-c26f-49c6-a97e-fda31e7b7033`, then restart n8n.
+by *Refiner 3*), each with Copy and Send to the Assistant, plus Run again
+(same brief) and Adjust the brief (answers kept).
+`best_prompt` in the answer is still version 1. Earlier workflow versions stay
+in its history: `f74f72e9` (three versions, no clarify step) and `20930c8a`
+(one prompt); go back with `docker exec -u node n8n-n8n-1 n8n publish:workflow
+--id=aY4Q1DmIxBDcsVpW --versionId=<id>`, then restart n8n. The page handles all three.
 Recent results stay in that browser only. The browser calls n8n directly: the
 webhook answers CORS for this origin, and the page's CSP allows connections to
-port 5678 only. Each run calls six models on your keys and writes to the
+port 5678 only. Clarifying calls one model; generating calls six, on your keys, and writes to the
 Supabase table `prompts` (create it with `examples/supabase-prompts.sql`).
 Opening the webhook URL itself in a browser fails: browsers send `GET`.
 
