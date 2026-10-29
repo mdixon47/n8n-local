@@ -329,7 +329,7 @@ workflows, check each node's credential field, then activate; imports arrive
 deactivated. Exported JSON can contain webhook paths and hard-coded values,
 so keep the folder out of git and out of chats. `N8N_EXPORT_DIR` moves it.
 
-## Saving and pinning Assistant chats
+## Saving, pinning and renaming Assistant chats
 
 n8n's AI Assistant has no pin or export of its own. Two ways to add them:
 
@@ -337,7 +337,11 @@ n8n's AI Assistant has no pin or export of its own. Two ways to add them:
   chat history page (**Chats**, **View all**), each chat has a 📌 pin button
   and a ⤓ save button next to its ⋯ menu; pinned chats come first. The
   sidebar's **Chats** section gets a **📌 Pinned** group, and, while a chat
-  is open, **Pin**/**Unpin** and **Save** for that chat. Save downloads the
+  is open, **Pin**/**Unpin** and **Save** for that chat. In the Pinned group,
+  ✎ next to a chat renames it in place: Enter or clicking away saves, Esc
+  cancels. It uses the same API call as n8n's own **Rename** (in the ⋯ menu of
+  any chat), so the new title shows everywhere and n8n no longer retitles
+  that chat itself. Save downloads the
   chat as a Markdown file. A pin is stored on the chat itself (the
   `n8nLocalPinned` flag in its metadata, set through n8n's own API), so it
   shows on every device. Pinning through the API counts as an update, so the
@@ -351,6 +355,7 @@ n8n's AI Assistant has no pin or export of its own. Two ways to add them:
 ./n8nctl.sh chats save --pinned      # only pinned chats (the nightly job does this)
 ./n8nctl.sh chats save 90b1f392      # one chat, by id or its first 6+ characters
 ./n8nctl.sh chats pin 90b1f392       # pin / unpin without the browser
+./n8nctl.sh chats rename 90b1f392 Weekly report workflow   # new title, 1-255 characters
 ```
 
 Both write the same Markdown: your messages and the Assistant's replies with
@@ -360,7 +365,10 @@ and the context n8n adds to your messages behind the scenes are left out.
 is readable only by you (700/600); `N8N_CHATS_DIR` moves it. The nightly job
 saves pinned chats there, so each pinned chat has a copy outside n8n's
 database. The terminal commands read the SQLite database inside the n8n
-container read-only; `pin`/`unpin` change only the chat's pin flag.
+container read-only; `pin`/`unpin` change only the chat's pin flag, and
+`rename` only its title (plus n8n's `titleRefined` flag, as n8n's own rename
+does). After a terminal rename, reload the Assistant tab to see it; the log
+records the chat id, not the title.
 
 Chats stay until you delete them: `N8N_INSTANCE_AI_THREAD_TTL_DAYS=0` in
 `n8n/.env` turns off n8n's default deletion of chats idle for 30 days.

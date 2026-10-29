@@ -24,8 +24,10 @@
 //    n8nLocalPinned in the chat's metadata, set through n8n's own API
 //    (PATCH /rest/instance-ai/threads/<id>; n8n merges metadata, so its own
 //    fields stay). Save downloads the chat as Markdown, the same file
-//    './n8nctl.sh chats save' writes. If n8n's markup changes, the buttons
-//    stop appearing; nothing else is affected.
+//    './n8nctl.sh chats save' writes. Each pinned chat in the sidebar can be
+//    renamed in place (✎), through the same PATCH n8n's own Rename uses. If
+//    n8n's markup changes, the buttons stop appearing; nothing else is
+//    affected.
 //
 // It runs with the editor's full privileges, so it stays small. Network:
 // the template id goes to the gallery without cookies; chat requests go only
@@ -196,6 +198,25 @@
       .then(function () { return loadChats(true); });
   }
 
+  function vueGlobals() {
+    var app = document.getElementById('app');
+    return app && app.__vue_app__ ? app.__vue_app__.config.globalProperties : null;
+  }
+
+  // n8n takes 1 to 255 characters and marks the title as refined, so it stops
+  // retitling the chat itself. Its own chat lists keep their copy of the
+  // title; its store's renameThread updates them (and, for a chat it loaded
+  // from the server, sends the same PATCH again).
+  function setTitle(id, title) {
+    return api('PATCH', '/instance-ai/threads/' + encodeURIComponent(id), { title: title }).then(function () {
+      var g = vueGlobals();
+      var store = g && g.$pinia && g.$pinia._s && g.$pinia._s.get('instanceAi');
+      if (store && typeof store.renameThread === 'function') {
+        return Promise.resolve(store.renameThread(id, title)).catch(function () { /* saved already */ });
+      }
+    }).then(function () { return loadChats(true); });
+  }
+
   // Markdown, as in './n8nctl.sh chats save'. n8n wraps what you type in
   // context blocks it hides in its own UI; strip them the same way
   // (cleanStoredUserMessage in n8n's instance-ai internal-messages.js).
@@ -284,6 +305,47 @@
     saveChat(id).then(function (name) { toast('Saved ' + name); }, function (e) { toast('Could not save the chat: ' + e.message); });
   }
 
+  // Swaps a pinned chat's row for a text box: Enter or leaving it saves, Escape cancels.
+  function renameAction(id, row) {
+    var t = chatById(id);
+    if (!t || row.querySelector('.n8nl-rename')) return;
+    var input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'n8nl-rename';
+    input.maxLength = 255;
+    input.value = t.title;
+    input.setAttribute('aria-label', 'New name for the chat');
+    row.textContent = '';
+    row.appendChild(input);
+    input.focus();
+    input.select();
+    var done = false;
+    function finish(save) {
+      if (done) return;
+      done = true;
+      var title = input.value.trim();
+      var box = row.closest('.n8nl-pinned');
+      if (box) box.removeAttribute('data-key');
+      input.remove();
+      if (save && title && title !== t.title) {
+        var before = t.title;
+        t.title = title;  // shown at once; the reload below confirms it
+        setTitle(id, title).then(function () { toast('Chat renamed'); }, function (e) {
+          t.title = before;
+          scheduleChats();
+          toast('Could not rename the chat: ' + e.message);
+        });
+      }
+      scheduleChats();
+    }
+    input.addEventListener('keydown', function (e) {
+      e.stopPropagation();  // keep n8n's keyboard shortcuts out of the box
+      if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+      else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+    });
+    input.addEventListener('blur', function () { finish(true); });
+  }
+
   function button(cls, label, text, onClick) {
     var b = document.createElement('button');
     b.type = 'button';
@@ -298,8 +360,8 @@
   // Inside n8n's own router, so switching chats does not reload the editor.
   function openChat(id, e) {
     if (e && (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0)) return;
-    var app = document.getElementById('app');
-    var router = app && app.__vue_app__ && app.__vue_app__.config.globalProperties.$router;
+    var g = vueGlobals();
+    var router = g && g.$router;
     if (!router) return;  // let the link load the page
     e.preventDefault();
     router.push(basePath().replace(/\/$/, '') + '/assistant/' + id);
@@ -319,6 +381,13 @@
     '.n8nl-label{font-size:12px;font-weight:600;padding:4px 12px 2px;color:var(--color--text--tint-1,#888)}',
     '.n8nl-item{display:block;padding:6px 12px;border-radius:6px;font-size:13px;text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--color--text,inherit)}',
     '.n8nl-item:hover,.n8nl-item[aria-current="page"]{background:var(--color--background--light-1,rgba(127,127,127,.15))}',
+    '.n8nl-row{display:flex;align-items:center;gap:2px}',
+    '.n8nl-row .n8nl-item{flex:1;min-width:0}',
+    '.n8nl-row .n8nl-edit{opacity:0}',
+    '.n8nl-row:hover .n8nl-edit,.n8nl-row:focus-within .n8nl-edit{opacity:1}',
+    '@media (hover:none){.n8nl-row .n8nl-edit{opacity:1}}',
+    '.n8nl-rename{flex:1;min-width:0;margin:1px 4px;padding:5px 8px;border-radius:6px;font:inherit;font-size:13px;',
+    'border:1px solid var(--color--primary,#ff6d5a);background:var(--color--background--light-3,#fff);color:var(--color--text,inherit);outline:none}',
     '.n8nl-actions{display:flex;flex-wrap:wrap;gap:4px;padding:2px 8px}',
     '.n8nl-actions .n8nl-btn{font-size:12px;padding:4px 8px;border:1px solid var(--color--foreground,rgba(127,127,127,.35))}',
     '#n8nl-toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(20px);opacity:0;pointer-events:none;z-index:99999;',
@@ -378,6 +447,7 @@
     var pinnedList = (chats.list || []).filter(function (t) { return t.pinned; });
     var openChat_ = open ? chatById(open) : null;
     var box = sidebar.querySelector('.n8nl-pinned');
+    if (box && box.querySelector('.n8nl-rename')) return;  // a rename is being typed
     // Rebuild only when something changed, so this does not feed the observer.
     var key = JSON.stringify([open, openChat_ && openChat_.pinned, pinnedList.map(function (t) { return [t.id, t.title]; })]);
     if (box && box.getAttribute('data-key') === key) return;
@@ -396,6 +466,8 @@
       label.textContent = '📌 Pinned';
       box.appendChild(label);
       pinnedList.forEach(function (t) {
+        var row = document.createElement('div');
+        row.className = 'n8nl-row';
         var a = document.createElement('a');
         a.className = 'n8nl-item';
         a.href = basePath() + 'assistant/' + t.id;
@@ -403,7 +475,9 @@
         a.textContent = t.title;
         if (t.id === open) a.setAttribute('aria-current', 'page');
         a.addEventListener('click', function (e) { openChat(t.id, e); });
-        box.appendChild(a);
+        row.appendChild(a);
+        row.appendChild(button('n8nl-edit', 'Rename', '✎', function () { renameAction(t.id, row); }));
+        box.appendChild(row);
       });
     }
     if (open) {

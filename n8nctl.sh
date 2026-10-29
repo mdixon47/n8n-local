@@ -17,7 +17,7 @@
 # Usage: ./n8nctl.sh <command> [options]    (see ./n8nctl.sh help)
 set -euo pipefail
 
-N8NCTL_VERSION="1.7.0"
+N8NCTL_VERSION="1.8.0"
 INSTALLER_URL="https://get.n8n.io"
 # Newest 100 releases. "latest" alone is not enough: n8n also publishes 1.x
 # maintenance releases, and betas are marked prerelease.
@@ -1117,13 +1117,15 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
-# AI Assistant chats: list, save as Markdown, pin
+# AI Assistant chats: list, save as Markdown, pin, rename
 # ---------------------------------------------------------------------------
 # A pin is the flag n8nLocalPinned in the chat's metadata, the same one
 # templates-api/web/editor-hook.js sets from the Assistant's chat history page.
 # The script runs inside the n8n container (Node's built-in node:sqlite) and
 # reads the SQLite database read-only, except for pin/unpin, which change that
-# one metadata field and nothing else (not even the chat's last-active time).
+# one metadata field and nothing else (not even the chat's last-active time),
+# and rename, which sets the title plus titleRefined in the metadata, as n8n's
+# own rename does (n8n then stops retitling the chat itself).
 chats_script() {
   cat <<'JS'
 'use strict';
@@ -1145,10 +1147,10 @@ const threads = db.prepare(`SELECT t.id, t.title, t.metadata, t.createdAt, t.upd
   .map((t) => Object.assign(t, { pinned: meta(t)[PIN] === true, title: t.title || 'Untitled chat' }));
 const when = (v) => String(v || '').replace('T', ' ').slice(0, 16);
 
-function pick() {
-  if (args.includes('--all')) return threads;
-  if (args.includes('--pinned')) return threads.filter((t) => t.pinned);
-  return args.map((a) => {
+function pick(list = args) {
+  if (list.includes('--all')) return threads;
+  if (list.includes('--pinned')) return threads.filter((t) => t.pinned);
+  return list.map((a) => {
     const hits = a.length >= 6 ? threads.filter((t) => t.id.startsWith(a)) : [];
     if (hits.length !== 1) { console.error(`${a}: ${hits.length ? 'matches more than one chat' : 'no such chat (use at least 6 characters of its id)'}`); process.exit(3); }
     return hits[0];
@@ -1211,6 +1213,15 @@ if (mode === 'list') {
     set.run(JSON.stringify(m), t.id);
     console.log(`${mode === 'pin' ? 'Pinned' : 'Unpinned'} ${t.id.slice(0, 8)}  ${t.title.slice(0, 70)}`);
   }
+} else if (mode === 'rename') {
+  // Same limits as n8n's PATCH /instance-ai/threads/<id>: trimmed, 1 to 255 characters.
+  const title = args.slice(1).join(' ').trim();
+  if (!title || title.length > 255) { console.error('the new title must be 1 to 255 characters'); process.exit(3); }
+  const [t] = pick(args.slice(0, 1));
+  const m = meta(t);
+  m.titleRefined = true;
+  db.prepare('UPDATE instance_ai_threads SET title = ?, metadata = ? WHERE id = ?').run(title, JSON.stringify(m), t.id);
+  console.log(`Renamed ${t.id.slice(0, 8)}  ${t.title.slice(0, 70)}  ->  ${title.slice(0, 70)}`);
 } else {
   console.error(`unknown mode ${mode}`); process.exit(2);
 }
@@ -1264,7 +1275,13 @@ cmd_chats() {
       [[ $# -gt 0 ]] || die "usage: ./n8nctl.sh chats $sub <id> [<id>...] (ids from './n8nctl.sh chats')"
       chats_run "$sub" - "$@" || die "chats $sub failed"
       log "chats-$sub  ids=$*" ;;
-    *) die "unknown chats command '$sub' (list, save, pin, unpin)" ;;
+    rename)
+      [[ $# -ge 2 ]] || die "usage: ./n8nctl.sh chats rename <id> <new title> (ids from './n8nctl.sh chats')"
+      chats_run rename - "$@" || die "chats rename failed"
+      # The id only: titles can say anything said to the Assistant.
+      log "chats-rename  id=$1"
+      say "Reload the Assistant in the browser to see the new title." ;;
+    *) die "unknown chats command '$sub' (list, save, pin, unpin, rename)" ;;
   esac
 }
 
@@ -1520,6 +1537,7 @@ Commands
   chats                          List AI Assistant chats, pinned (*) first
   chats save [--pinned | ID...]  Save chats as Markdown to chats/ (all by default; one file per chat)
   chats pin|unpin ID...          Pin a chat (also from the Assistant's chat history page)
+  chats rename ID TITLE...       Rename a chat (also in the Assistant's sidebar, pinned chats too)
   backups [--prune N]            List snapshots; --prune keeps only the newest N
   verify <dir>                   Check a snapshot: files, sha256, versions, tarball
   restore <dir>                  Roll back to a snapshot (takes a pre-restore backup first)

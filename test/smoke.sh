@@ -176,6 +176,13 @@ JS
   check       "chats save (all)"                       bash -c "\"$CTL\" chats save && [ \$(ls '$CH' | wc -l) -eq 2 ]"
   node -e "new (require('node:sqlite').DatabaseSync)(process.argv[1]).exec(\"UPDATE instance_ai_threads SET title='Renamed chat' WHERE id LIKE 'aaaa%'\")" "$STUB_CHATS_DB"
   check       "chats: a renamed chat replaces its file" bash -c "\"$CTL\" chats save aaaaaaaa && ls '$CH' | grep -qx '2026-10-01-renamed-chat-aaaaaaaa.md' && [ \$(ls '$CH' | wc -l) -eq 2 ]"
+  check       "chats rename"                           "$CTL" chats rename bbbbbbbb Better  title
+  check       "chats rename: title set, refined, rest kept" bash -c "node -e \"const d=new (require('node:sqlite').DatabaseSync)(process.argv[1]);const r=d.prepare(\\\"SELECT title,metadata,updatedAt FROM instance_ai_threads WHERE id LIKE 'bbbb%'\\\").get();const m=JSON.parse(r.metadata);process.exit(r.title==='Better title'&&m.titleRefined===true&&r.updatedAt==='2026-10-04 10:00:00.000'?0:1)\" '$STUB_CHATS_DB'"
+  check       "chats rename: listed under the new title" bash -c "\"$CTL\" chats | grep -q 'bbbbbbbb  Better title'"
+  check_fails "chats rename rejects a blank title"     "$CTL" chats rename bbbbbbbb "   "
+  check_fails "chats rename rejects a 256-char title"  "$CTL" chats rename bbbbbbbb "$(printf 'x%.0s' $(seq 256))"
+  check_fails "chats rename rejects an unknown id"     "$CTL" chats rename dddddddd New title
+  check       "chats rename: logged, id only"          bash -c "grep -q 'chats-rename  id=bbbbbbbb$' '$N8N_BASE_DIR/n8nctl.log' && ! grep -q 'Better title' '$N8N_BASE_DIR/n8nctl.log'"
   check       "chats unpin"                            bash -c "\"$CTL\" chats unpin aaaaaaaa && ! \"$CTL\" chats | grep -q '^ \*'"
   check       "chats: logged"                          bash -c "grep -q 'chats-save  path=.* chats=1 selection=--pinned' '$N8N_BASE_DIR/n8nctl.log' && grep -q 'chats-pin  ids=aaaaaaaa' '$N8N_BASE_DIR/n8nctl.log'"
   check       "chats: container temp cleaned"          bash -c "! ls -d '$STUB_STATE'/container/tmp/n8nctl-chats-* 2>/dev/null | grep -q ."
@@ -185,6 +192,7 @@ fi
 check       "chats: gitignore gained chats/"         bash -c "\"$CTL\" chats save --pinned && grep -qx 'chats/' '$N8N_BASE_DIR/.gitignore'"
 check_fails "chats: unknown subcommand"              "$CTL" chats bogus
 check_fails "chats pin needs an id"                  "$CTL" chats pin
+check_fails "chats rename needs a title"             "$CTL" chats rename aaaaaaaa
 "$CTL" stop >/dev/null
 check_fails "chats need n8n running"                 "$CTL" chats
 "$CTL" start >/dev/null

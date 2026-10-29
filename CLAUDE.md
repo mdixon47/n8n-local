@@ -51,7 +51,7 @@ Always go through the wrapper rather than raw `curl | sh`:
 | Start / stop / logs | `./n8nctl.sh start` · `stop` · `logs [service]` |
 | Snapshot | `./n8nctl.sh backup` |
 | Export all workflows as JSON (no credentials) | `./n8nctl.sh export` → `exports/<timestamp>/` |
-| List / save / pin Assistant chats | `./n8nctl.sh chats` · `chats save [--pinned \| ID...]` → `chats/` · `chats pin\|unpin ID...` (pin flag `n8nLocalPinned` in the chat's metadata; also from the Assistant UI via editor-hook.js) |
+| List / save / pin / rename Assistant chats | `./n8nctl.sh chats` · `chats save [--pinned \| ID...]` → `chats/` · `chats pin\|unpin ID...` · `chats rename ID TITLE` (pin flag `n8nLocalPinned` in the chat's metadata; rename sets the title + `titleRefined`; also from the Assistant UI via editor-hook.js, ✎ in the Pinned group) |
 | List snapshots | `./n8nctl.sh backups` |
 | Check a snapshot | `./n8nctl.sh verify n8n-backups/<timestamp>` |
 | Prune to newest N | `./n8nctl.sh backups --prune N` (deletes; confirm first) |
