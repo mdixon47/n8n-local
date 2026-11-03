@@ -22,7 +22,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Ensure shellcheck
         shell: bash
@@ -35,13 +35,15 @@ jobs:
 
       - name: Syntax
         shell: bash
-        run: bash -n n8nctl.sh launchd/nightly.sh test/smoke.sh test/stubs/curl test/stubs/docker
+        run: |
+          # bash -n parses only its first file; any others are just arguments to it.
+          for f in n8nctl.sh launchd/nightly.sh test/smoke.sh test/stubs/curl test/stubs/docker; do bash -n "$f"; done
 
       - name: ShellCheck
         shell: bash
         run: shellcheck n8nctl.sh launchd/nightly.sh test/smoke.sh test/stubs/curl test/stubs/docker
 
-      - name: Preload, network check, gallery and ideas page parse
+      - name: Preload, network check, gallery, ideas and prompts pages parse
         shell: bash
         run: |
           # n8n will not start if runtime/force-http1.cjs fails to load.
@@ -49,6 +51,7 @@ jobs:
           node --check test/netcheck.js
           node --check templates-api/web/app.js
           node --check templates-api/web/editor-hook.js
+          node --check templates-api/web/prompts.js
           python3 -I -B -c 'import json, sys; json.load(open(sys.argv[1], encoding="utf-8"))' templates-api/web/ideas.json
           python3 -I -B -c 'import ast, sys; [ast.parse(open(f, encoding="utf-8").read(), f) for f in sys.argv[1:]]' \
             templates-api/server.py templates-api/build.py
