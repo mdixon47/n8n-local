@@ -112,6 +112,12 @@ does not fix the cause, set **Retry On Fail** on the LinkedIn node
 On 2026-10-12 TSO was turned off on this Mac (until the next reboot);
 the check has not been run since.
 
+2026-10-29: failing again. The Mac rebooted on 10-28 at 21:48, so TSO was
+back on (`net.inet.tcp.tso: 1`). The check failed 1 of 30 from the Mac and
+2 of 30 from the container, all `BAD_RECORD_MAC`; *Article → Facebook Post*
+run 5766 failed the same way in *Send Post Email*, 239 ms in. TSO-off has
+still not been tested while failures are happening; that is the next step.
+
 **Done when:** this check reports `0 failed` from the Mac and from the
 container on several days, and the LinkedIn node stops failing:
 
@@ -416,6 +422,17 @@ prompt now asks for the object, *Assign labels for message* retries 3
 times and then continues, and an email it still cannot classify is left
 unlabelled instead of failing the batch. Undo point: the workflow's
 history in the editor, or `n8n-backups/20261021-030007`.
+
+2026-10-29: still not reconnected; the credential was last written on
+10-16 21:06, while *Google Sheets account* and *Google Drive account*
+refresh normally (written during each run). *Article → Facebook Post*
+(inactive, being built) failed in *Send Post Email* in runs 5763 to 5767:
+four with `needs to be reconnected`, one with `bad record mac` (item 3).
+n8n raises "needs to be reconnected" only when Google answers the token
+refresh with `invalid_grant` (`isRevokedOAuth2GrantError` in n8n-core's
+`oauth.js`), so that is a real refusal from Google, not the network, even
+when the credential page says the account is connected. Retries do not help
+it; reconnecting does.
 
 **Fix:**
 
