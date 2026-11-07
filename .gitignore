@@ -12,3 +12,5 @@ templates-api/.build-*
 templates-api/library/
 # AI Assistant chats saved as Markdown by n8nctl.sh chats save (private)
 chats/
+# Login details (private)
+n8n-access.md
