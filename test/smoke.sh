@@ -151,17 +151,25 @@ const { DatabaseSync } = require('node:sqlite');
 const db = new DatabaseSync(process.argv[2]);
 db.exec(`CREATE TABLE user (id TEXT PRIMARY KEY);
   CREATE TABLE instance_ai_threads (id TEXT PRIMARY KEY, resourceId TEXT, title TEXT, metadata TEXT, createdAt TEXT, updatedAt TEXT);
-  CREATE TABLE instance_ai_messages (id TEXT PRIMARY KEY, threadId TEXT, content TEXT, role TEXT, createdAt TEXT);
+  CREATE TABLE instance_ai_messages (id TEXT PRIMARY KEY, threadId TEXT REFERENCES instance_ai_threads (id) ON DELETE CASCADE, content TEXT, role TEXT, createdAt TEXT);
+  CREATE TABLE instance_ai_resources (id TEXT PRIMARY KEY);
   INSERT INTO user VALUES ('u1');`);
 const t = db.prepare('INSERT INTO instance_ai_threads VALUES (?, ?, ?, ?, ?, ?)');
 t.run('aaaaaaaa-1111-4111-8111-111111111111', 'u1', 'First chat', '{"source":"assistant_page"}', '2026-10-01 10:00:00.000', '2026-10-02 10:00:00.000');
 t.run('bbbbbbbb-2222-4222-8222-222222222222', 'u1', 'Second chat', '{}', '2026-10-03 10:00:00.000', '2026-10-04 10:00:00.000');
 t.run('cccccccc-3333-4333-8333-333333333333', 'sub-agent:x', 'Sub-agent thread', '{}', '2026-10-05 10:00:00.000', '2026-10-05 10:00:00.000');
+// For prune: an old chat with a sub-agent thread, and one active an hour ago.
+const ago = (h) => new Date(Date.now() - h * 3600000).toISOString().replace('T', ' ').slice(0, 23);
+t.run('dddddddd-4444-4444-8444-444444444444', 'u1', 'Old chat', '{}', '2026-09-01 10:00:00.000', '2026-09-01 10:00:00.000');
+t.run('eeeeeeee-5555-4555-8555-555555555555', 'instance-ai-subagent:dddddddd-4444-4444-8444-444444444444:builder', 'Old sub-agent', '{}', '2026-09-01 10:00:00.000', '2026-09-01 10:00:00.000');
+t.run('ffffffff-6666-4666-8666-666666666666', 'u1', 'Fresh chat', '{}', ago(1), ago(1));
+db.exec(`INSERT INTO instance_ai_resources VALUES ('instance-ai-subagent:dddddddd-4444-4444-8444-444444444444:builder'), ('thread:eeeeeeee-5555-4555-8555-555555555555'), ('u1');`);
 const m = db.prepare('INSERT INTO instance_ai_messages VALUES (?, ?, ?, ?, ?)');
 const msg = (id, thread, role, parts, at) => m.run(id, thread, JSON.stringify({ id, role, content: parts }), role, at);
 msg('m1', 'aaaaaaaa-1111-4111-8111-111111111111', 'user', [{ type: 'text', text: '<thread-context>\nsecret context\n</thread-context>\n\nHello there\n\n<current-date-time>\nnow\n</current-date-time>' }], '2026-10-01 10:00:01.000');
 msg('m2', 'aaaaaaaa-1111-4111-8111-111111111111', 'assistant', [{ type: 'reasoning', text: 'thinking' }, { type: 'text', text: 'Hi! Done.' }, { type: 'tool-call', toolName: 'workflows', state: 'output-available' }], '2026-10-01 10:00:02.000');
 msg('m3', 'bbbbbbbb-2222-4222-8222-222222222222', 'user', [{ type: 'text', text: 'Second question' }], '2026-10-03 10:00:01.000');
+msg('m4', 'dddddddd-4444-4444-8444-444444444444', 'user', [{ type: 'text', text: 'Old question' }], '2026-09-01 10:00:01.000');
 JS
   check       "chats: lists users' chats"              bash -c "out=\$(\"$CTL\" chats) && grep -q 'First chat' <<<\"\$out\" && grep -q 'Second chat' <<<\"\$out\" && ! grep -q 'Sub-agent' <<<\"\$out\""
   check       "chats pin"                              "$CTL" chats pin aaaaaaaa
@@ -173,19 +181,31 @@ JS
   check       "chats: dir is 700"                      test "$(perm "$CH")" = "drwx------"
   check       "chats: file is 600"                     test "$(perm "$CH/2026-10-01-first-chat-aaaaaaaa.md")" = "-rw-------"
   check       "chats: n8n's context blocks stripped"   bash -c "f='$CH/2026-10-01-first-chat-aaaaaaaa.md'; grep -qx 'Hello there' \"\$f\" && ! grep -q 'secret context\|current-date-time\|thinking' \"\$f\" && grep -q '_Tools: workflows_' \"\$f\""
-  check       "chats save (all)"                       bash -c "\"$CTL\" chats save && [ \$(ls '$CH' | wc -l) -eq 2 ]"
+  check       "chats save (all)"                       bash -c "\"$CTL\" chats save && [ \$(ls '$CH' | wc -l) -eq 4 ]"
   node -e "new (require('node:sqlite').DatabaseSync)(process.argv[1]).exec(\"UPDATE instance_ai_threads SET title='Renamed chat' WHERE id LIKE 'aaaa%'\")" "$STUB_CHATS_DB"
-  check       "chats: a renamed chat replaces its file" bash -c "\"$CTL\" chats save aaaaaaaa && ls '$CH' | grep -qx '2026-10-01-renamed-chat-aaaaaaaa.md' && [ \$(ls '$CH' | wc -l) -eq 2 ]"
+  check       "chats: a renamed chat replaces its file" bash -c "\"$CTL\" chats save aaaaaaaa && ls '$CH' | grep -qx '2026-10-01-renamed-chat-aaaaaaaa.md' && [ \$(ls '$CH' | wc -l) -eq 4 ]"
   check       "chats rename"                           "$CTL" chats rename bbbbbbbb Better  title
   check       "chats rename: title set, refined, rest kept" bash -c "node -e \"const d=new (require('node:sqlite').DatabaseSync)(process.argv[1]);const r=d.prepare(\\\"SELECT title,metadata,updatedAt FROM instance_ai_threads WHERE id LIKE 'bbbb%'\\\").get();const m=JSON.parse(r.metadata);process.exit(r.title==='Better title'&&m.titleRefined===true&&r.updatedAt==='2026-10-04 10:00:00.000'?0:1)\" '$STUB_CHATS_DB'"
   check       "chats rename: listed under the new title" bash -c "\"$CTL\" chats | grep -q 'bbbbbbbb  Better title'"
   check_fails "chats rename rejects a blank title"     "$CTL" chats rename bbbbbbbb "   "
   check_fails "chats rename rejects a 256-char title"  "$CTL" chats rename bbbbbbbb "$(printf 'x%.0s' $(seq 256))"
-  check_fails "chats rename rejects an unknown id"     "$CTL" chats rename dddddddd New title
+  check_fails "chats rename rejects an unknown id"     "$CTL" chats rename abcdef12 New title
   check       "chats rename: logged, id only"          bash -c "grep -q 'chats-rename  id=bbbbbbbb$' '$N8N_BASE_DIR/n8nctl.log' && ! grep -q 'Better title' '$N8N_BASE_DIR/n8nctl.log'"
   check       "chats unpin"                            bash -c "\"$CTL\" chats unpin aaaaaaaa && ! \"$CTL\" chats | grep -q '^ \*'"
   check       "chats: logged"                          bash -c "grep -q 'chats-save  path=.* chats=1 selection=--pinned' '$N8N_BASE_DIR/n8nctl.log' && grep -q 'chats-pin  ids=aaaaaaaa' '$N8N_BASE_DIR/n8nctl.log'"
   check       "chats: container temp cleaned"          bash -c "! ls -d '$STUB_STATE'/container/tmp/n8nctl-chats-* 2>/dev/null | grep -q ."
+  "$CTL" chats pin aaaaaaaa >/dev/null
+  check       "chats prune: lists idle unpinned only"  bash -c "out=\$(echo n | \"$CTL\" chats prune 2>&1); grep -q 'Old chat' <<<\"\$out\" && grep -q 'Better title' <<<\"\$out\" && ! grep -q 'Renamed chat\|Fresh chat' <<<\"\$out\""
+  check_fails "chats prune: asks without a terminal"   bash -c "echo y | \"$CTL\" chats prune"
+  check       "chats prune: nothing deleted unasked"   bash -c "\"$CTL\" chats | grep -q 'Old chat'"
+  check_fails "chats prune rejects --days 0"           "$CTL" -y chats prune --days 0
+  check_fails "chats prune rejects --days abc"         "$CTL" -y chats prune --days abc
+  check_fails "chats prune rejects unknown args"       "$CTL" -y chats prune --all
+  check       "chats prune -y"                         bash -c "\"$CTL\" -y chats prune --days 10 | grep -q 'Deleted 2 unpinned chat(s)'"
+  check       "chats prune: idle unpinned gone, rest kept" bash -c "out=\$(\"$CTL\" chats); ! grep -q 'Old chat\|Better title' <<<\"\$out\" && grep -q 'Renamed chat' <<<\"\$out\" && grep -q 'Fresh chat' <<<\"\$out\""
+  check       "chats prune: sub-agent, resources, messages gone" bash -c "node -e \"const d=new (require('node:sqlite').DatabaseSync)(process.argv[1]);const n=(q)=>d.prepare(q).get().n;process.exit(n(\\\"SELECT COUNT(*) n FROM instance_ai_threads WHERE id LIKE 'eeee%'\\\")===0&&n(\\\"SELECT COUNT(*) n FROM instance_ai_resources WHERE id <> 'u1'\\\")===0&&n(\\\"SELECT COUNT(*) n FROM instance_ai_resources WHERE id = 'u1'\\\")===1&&n(\\\"SELECT COUNT(*) n FROM instance_ai_messages WHERE threadId LIKE 'dddd%'\\\")===0&&n(\\\"SELECT COUNT(*) n FROM instance_ai_messages WHERE threadId LIKE 'aaaa%'\\\")===2?0:1)\" '$STUB_CHATS_DB'"
+  check       "chats prune: logged with ids, no titles" bash -c "grep -q 'chats-prune  days=10 chats=2 ids=' '$N8N_BASE_DIR/n8nctl.log' && grep 'chats-prune' '$N8N_BASE_DIR/n8nctl.log' | grep -q dddddddd && ! grep 'chats-prune' '$N8N_BASE_DIR/n8nctl.log' | grep -q 'Old chat'"
+  check       "chats prune: nothing left to delete"    bash -c "\"$CTL\" -y chats prune | grep -q 'No unpinned chats idle'"
 else
   echo "skip chats checks: this node has no node:sqlite (needs Node 22.13+)"
 fi
@@ -292,12 +312,35 @@ check       "status: quiet triggers"                 bash -c "\"$CTL\" status 2>
 head -c 4194304 /dev/urandom > "$VOL/blob"
 check       "nightly: big growth is reported"        bash -c "\"$NIGHTLY\" | grep -q '^NOTIFY:The n8n backup grew'"
 rm -f "$VOL/blob"
+# Docker Desktop not running at 23:00: started, stack started, normal run
+printf '#!/bin/sh\nrm -f "%s/docker-down"\n' "$STUB_STATE" > "$WORK/start-docker" && chmod +x "$WORK/start-docker"
+"$CTL" stop >/dev/null 2>&1; touch "$STUB_STATE/docker-down"
+check       "nightly: starts Docker and the stack"   bash -c "out=\$(N8NCTL_DOCKER_START='$WORK/start-docker' \"$NIGHTLY\") && ! grep -q NOTIFY <<<\"\$out\" && grep -q 'starting the stack' '$WORK/nightly.log' && test -f '$STUB_STATE/running'"
+touch "$STUB_STATE/docker-down"
+check       "nightly: no Docker, one notification"   bash -c "out=\$(N8NCTL_DOCKER_START=true N8NCTL_DOCKER_WAIT=0 \"$NIGHTLY\") && [ \$(grep -c NOTIFY <<<\"\$out\") -eq 1 ] && grep -q '^NOTIFY:Nightly n8n job skipped: Docker Desktop' <<<\"\$out\""
+rm -f "$STUB_STATE/docker-down"
 
 # --- start / stop / logs / uninstall ------------------------------------------
 check       "stop"                                   "$CTL" stop
 check       "stopped"                                test ! -f "$STUB_STATE/running"
 check       "start"                                  "$CTL" start
 check       "logs"                                   "$CTL" logs n8n
+
+# --- login (owner password from n8n-access.md to the clipboard) ---------------
+ACC="$N8N_BASE_DIR/n8n-access.md"
+check_fails "login: no notes file"                   "$CTL" login --no-open
+check       "status: no notes file"                  bash -c "\"$CTL\" status 2>&1 | grep -q 'Login:      no n8n-access.md'"
+# shellcheck disable=SC2016  # literal backticks in the fixture
+printf '# n8n access\n\n| | |\n| --- | --- |\n| URL | http://localhost:5678 |\n| Email (login) | owner@example.test |\n| Password | `pw-SECRET-123` |\n' > "$ACC" && chmod 644 "$ACC"
+check       "status: loose notes mode flagged"       bash -c "\"$CTL\" status 2>&1 | grep -q 'n8n-access.md is mode 644'"
+check       "login: copies, never prints it"         bash -c "out=\$(N8NCTL_CLIP_SECONDS=0 \"$CTL\" login --no-open 2>&1) && ! grep -q SECRET <<<\"\$out\" && grep -q 'Email:   owner@example.test' <<<\"\$out\" && [ \"\$(cat '$STUB_STATE/clipboard')\" = 'pw-SECRET-123' ]"
+check       "login: notes set to 600"                test "$(perm "$ACC")" = "-rw-------"
+check       "login: password not in the log"         bash -c "! grep -q SECRET '$N8N_BASE_DIR/n8nctl.log'"
+check       "login: clipboard cleared after N s"     bash -c "N8NCTL_CLIP_SECONDS=1 \"$CTL\" login --no-open && sleep 2 && [ ! -s '$STUB_STATE/clipboard' ]"
+check       "login: other copy left alone"           bash -c "N8NCTL_CLIP_SECONDS=1 \"$CTL\" login --no-open && printf other > '$STUB_STATE/clipboard' && sleep 2 && [ \"\$(cat '$STUB_STATE/clipboard')\" = other ]"
+check_fails "login: rejects unknown option"          "$CTL" login --show
+check       "status: login line"                     bash -c "\"$CTL\" status 2>&1 | grep -q \"Login:      n8n-access.md; './n8nctl.sh login'\""
+rm -f "$ACC"
 check_fails "uninstall refuses without -y off a tty" "$CTL" uninstall
 check       "install dir still there"                test -d "$N8N_BASE_DIR/n8n"
 check       "uninstall -y"                           "$CTL" -y uninstall

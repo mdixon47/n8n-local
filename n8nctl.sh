@@ -17,7 +17,7 @@
 # Usage: ./n8nctl.sh <command> [options]    (see ./n8nctl.sh help)
 set -euo pipefail
 
-N8NCTL_VERSION="1.8.0"
+N8NCTL_VERSION="1.9.0"
 INSTALLER_URL="https://get.n8n.io"
 # Newest 100 releases. "latest" alone is not enough: n8n also publishes 1.x
 # maintenance releases, and betas are marked prerelease.
@@ -37,6 +37,7 @@ N8N_DIR="$N8N_BASE_DIR/n8n"
 N8N_BACKUP_DIR="${N8N_BACKUP_DIR:-$N8N_BASE_DIR/n8n-backups}"
 N8N_EXPORT_DIR="${N8N_EXPORT_DIR:-$N8N_BASE_DIR/exports}"
 N8N_CHATS_DIR="${N8N_CHATS_DIR:-$N8N_BASE_DIR/chats}"
+ACCESS_FILE="${N8N_ACCESS_FILE:-$N8N_BASE_DIR/n8n-access.md}"   # owner login notes (see cmd_login)
 LOG_FILE="$N8N_BASE_DIR/n8nctl.log"
 GITIGNORE_FILE="$N8N_BASE_DIR/.gitignore"
 
@@ -992,6 +993,13 @@ cmd_status() {
   fi
   mode="$(file_mode "$N8N_DIR/.env")"
   if [[ "$mode" == "600" ]]; then say ".env:       mode 600"; else warn ".env mode is $mode, expected 600 (chmod 600 n8n/.env)"; fi
+  if [[ -f "$ACCESS_FILE" ]]; then
+    mode="$(file_mode "$ACCESS_FILE")"
+    if [[ "$mode" == "600" ]]; then say "Login:      $(basename "$ACCESS_FILE"); './n8nctl.sh login' copies the password"
+    else warn "Login:      $(basename "$ACCESS_FILE") is mode $mode, expected 600 ('./n8nctl.sh login' fixes it)"; fi
+  else
+    say "Login:      no $(basename "$ACCESS_FILE") (README, 'Owner login')"
+  fi
   say "Model:      $(env_get "$MODEL_VAR" | grep . || echo "$DEFAULT_MODEL (n8n default)")"
   keys=""
   for p in $PROVIDERS; do env_is_set "$(provider_key_var "$p")" && keys="$keys $p"; done
@@ -1117,7 +1125,7 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
-# AI Assistant chats: list, save as Markdown, pin, rename
+# AI Assistant chats: list, save as Markdown, pin, rename, prune
 # ---------------------------------------------------------------------------
 # A pin is the flag n8nLocalPinned in the chat's metadata, the same one
 # templates-api/web/editor-hook.js sets from the Assistant's chat history page.
@@ -1125,7 +1133,11 @@ EOF
 # reads the SQLite database read-only, except for pin/unpin, which change that
 # one metadata field and nothing else (not even the chat's last-active time),
 # and rename, which sets the title plus titleRefined in the metadata, as n8n's
-# own rename does (n8n then stops retitling the chat itself).
+# own rename does (n8n then stops retitling the chat itself), and prune, which
+# deletes unpinned chats idle for more than N days the way n8n's own delete
+# does (memoryService.deleteThread: the chat's sub-agent threads and their
+# memory resources, then the chat; its messages and the rest go by the
+# database's ON DELETE CASCADE).
 chats_script() {
   cat <<'JS'
 'use strict';
@@ -1136,8 +1148,9 @@ const DB = process.env.N8NCTL_CHATS_DB || '/home/node/.n8n/database.sqlite';  //
 if (!fs.existsSync(DB)) { console.error(`no SQLite database at ${DB}; only SQLite installs are supported`); process.exit(2); }
 const PIN = 'n8nLocalPinned';
 const [mode, outDir, ...args] = process.argv.slice(2);
-const db = new sqlite.DatabaseSync(DB, { readOnly: mode === 'list' || mode === 'save' });
+const db = new sqlite.DatabaseSync(DB, { readOnly: mode === 'list' || mode === 'save' || mode === 'prune-list' });
 db.exec('PRAGMA busy_timeout = 5000');
+db.exec('PRAGMA foreign_keys = ON');  // the cascades prune relies on (n8n turns it on too)
 
 const meta = (t) => { try { return JSON.parse(t.metadata || '{}') || {}; } catch (e) { return {}; } };
 // Users' own chats only (sub-agent threads belong to a thread, not a user).
@@ -1146,6 +1159,7 @@ const threads = db.prepare(`SELECT t.id, t.title, t.metadata, t.createdAt, t.upd
   FROM instance_ai_threads t WHERE t.resourceId IN (SELECT id FROM user) ORDER BY t.updatedAt DESC`).all()
   .map((t) => Object.assign(t, { pinned: meta(t)[PIN] === true, title: t.title || 'Untitled chat' }));
 const when = (v) => String(v || '').replace('T', ' ').slice(0, 16);
+const row = (t) => `${t.pinned ? ' * ' : '   '}  ${when(t.updatedAt)}  ${String(t.n).padStart(4)}  ${t.id.slice(0, 8)}  ${t.title.slice(0, 70)}`;
 
 function pick(list = args) {
   if (list.includes('--all')) return threads;
@@ -1193,7 +1207,7 @@ if (mode === 'list') {
   if (!threads.length) { console.log('No Assistant chats.'); process.exit(0); }
   console.log('PIN  LAST ACTIVE       MSGS  ID        TITLE');
   for (const t of [...threads.filter((x) => x.pinned), ...threads.filter((x) => !x.pinned)]) {
-    console.log(`${t.pinned ? ' * ' : '   '}  ${when(t.updatedAt)}  ${String(t.n).padStart(4)}  ${t.id.slice(0, 8)}  ${t.title.slice(0, 70)}`);
+    console.log(row(t));
   }
 } else if (mode === 'save') {
   fs.mkdirSync(outDir, { recursive: true });
@@ -1222,6 +1236,35 @@ if (mode === 'list') {
   m.titleRefined = true;
   db.prepare('UPDATE instance_ai_threads SET title = ?, metadata = ? WHERE id = ?').run(title, JSON.stringify(m), t.id);
   console.log(`Renamed ${t.id.slice(0, 8)}  ${t.title.slice(0, 70)}  ->  ${title.slice(0, 70)}`);
+} else if (mode === 'prune-list' || mode === 'prune') {
+  // Idle = n8n's updatedAt, the "last active" time (a new message moves it;
+  // pin and rename from the terminal do not). Pinned chats are never touched.
+  const days = Number(args[0]);
+  if (!Number.isInteger(days) || days < 1) { console.error('--days takes a whole number, 1 or more'); process.exit(3); }
+  const stamp = (v) => String(v || '').replace('T', ' ').slice(0, 19);
+  const cutoff = stamp(new Date(Date.now() - days * 86400000).toISOString());
+  const idle = threads.filter((t) => !t.pinned && stamp(t.updatedAt) < cutoff);
+  if (mode === 'prune-list') {
+    for (const t of idle) console.log(row(t));
+  } else {
+    const subs = db.prepare('SELECT id, resourceId FROM instance_ai_threads WHERE substr(resourceId, 1, ?) = ?');
+    const dropResource = db.prepare('DELETE FROM instance_ai_resources WHERE id = ?');
+    const dropThread = db.prepare('DELETE FROM instance_ai_threads WHERE id = ?');
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      for (const t of idle) {
+        const prefix = `instance-ai-subagent:${t.id}:`;  // createSubAgentResourceIdPrefix in @n8n/instance-ai
+        for (const s of subs.all(prefix.length, prefix)) {
+          dropResource.run(s.resourceId);
+          dropResource.run(`thread:${s.id}`);
+          dropThread.run(s.id);
+        }
+        dropThread.run(t.id);
+      }
+      db.exec('COMMIT');
+    } catch (e) { db.exec('ROLLBACK'); throw e; }
+    console.log(idle.map((t) => t.id.slice(0, 8)).join(' '));
+  }
 } else {
   console.error(`unknown mode ${mode}`); process.exit(2);
 }
@@ -1237,7 +1280,7 @@ chats_run() {
 }
 
 cmd_chats() {
-  local sub="${1:-list}" cid ts ctmp f id8 old n=0
+  local sub="${1:-list}" cid ts ctmp f id8 old n=0 days=10 idle gone
   [[ $# -gt 0 ]] && shift
   require_install
   check_docker
@@ -1281,7 +1324,34 @@ cmd_chats() {
       # The id only: titles can say anything said to the Assistant.
       log "chats-rename  id=$1"
       say "Reload the Assistant in the browser to see the new title." ;;
-    *) die "unknown chats command '$sub' (list, save, pin, unpin, rename)" ;;
+    prune)
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --days) [[ $# -ge 2 ]] || die "--days needs a number"; days="$2"; shift 2 ;;
+          --days=*) days="${1#--days=}"; shift ;;
+          *) die "usage: ./n8nctl.sh chats prune [--days N] (default 10)" ;;
+        esac
+      done
+      [[ "$days" =~ ^[1-9][0-9]{0,4}$ ]] || die "--days takes a whole number of days, 1 or more"
+      idle="$(chats_run prune-list - "$days")" || die "chats prune failed"
+      if [[ -z "$idle" ]]; then
+        ok "No unpinned chats idle for more than $days day(s)"
+        return 0
+      fi
+      n="$(grep -c . <<<"$idle")"
+      say "Unpinned chats idle for more than $days day(s):"
+      say "     LAST ACTIVE       MSGS  ID        TITLE"
+      say "$idle"
+      if ! confirm "Delete these $n chat(s)? Pinned chats stay. Only a snapshot restore brings them back"; then
+        say "Nothing deleted."
+        return 0
+      fi
+      gone="$(chats_run prune - "$days")" || die "chats prune failed"
+      n="$(wc -w <<<"$gone" | tr -d ' ')"
+      log "chats-prune  days=$days chats=$n ids=$gone"
+      ok "Deleted $n unpinned chat(s) idle for more than $days day(s)"
+      say "Reload the Assistant in the browser to see the change." ;;
+    *) die "unknown chats command '$sub' (list, save, pin, unpin, rename, prune)" ;;
   esac
 }
 
@@ -1513,6 +1583,69 @@ cmd_uninstall() {
   ok "Uninstalled. Backups: $backup_note"
 }
 
+# ---------------------------------------------------------------------------
+# login: the owner login, without showing the password
+# ---------------------------------------------------------------------------
+# The login notes live in n8n-access.md (gitignored, mode 600): a Markdown
+# table with an "Email (login)" row and a "Password" row whose value is in
+# backticks. login copies the password to the clipboard, prints the email and
+# opens the editor. The password never reaches the terminal, a command line
+# or the log. The clipboard is cleared after N8NCTL_CLIP_SECONDS (default 45;
+# 0 = keep) unless something else was copied in the meantime.
+clip_copy() {  # stdin -> clipboard; fails when there is no clipboard tool
+  if command -v pbcopy >/dev/null 2>&1; then pbcopy
+  elif command -v wl-copy >/dev/null 2>&1; then wl-copy
+  elif command -v xclip >/dev/null 2>&1; then xclip -selection clipboard
+  else return 1; fi
+}
+clip_paste() {
+  if command -v pbpaste >/dev/null 2>&1; then pbpaste
+  elif command -v wl-paste >/dev/null 2>&1; then wl-paste -n
+  elif command -v xclip >/dev/null 2>&1; then xclip -selection clipboard -o
+  else return 1; fi
+}
+
+cmd_login() {
+  local open_it=1 email pw mode secs="${N8NCTL_CLIP_SECONDS:-45}" url="http://localhost:$N8N_PORT"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --no-open) open_it=0 ;;
+      *) die "login takes only --no-open" ;;
+    esac
+    shift
+  done
+  [[ -f "$ACCESS_FILE" ]] ||
+    die "no login notes at $ACCESS_FILE (README, 'Owner login', says how to create them or reset a lost password)"
+  mode="$(file_mode "$ACCESS_FILE")"
+  if [[ "$mode" != "600" ]]; then
+    chmod 600 "$ACCESS_FILE"
+    log "login  chmod 600 $ACCESS_FILE (was $mode)"
+    warn "$ACCESS_FILE was mode $mode; set it to 600"
+  fi
+  email="$(sed -n 's/^| Email[^|]*| *\([^ |]*\) *|$/\1/p' "$ACCESS_FILE" | head -n1)"
+  # shellcheck disable=SC2016  # literal backticks around the value
+  pw="$(sed -n 's/^| Password | *`\(.*\)` *|$/\1/p' "$ACCESS_FILE" | head -n1)"
+  [[ -n "$pw" ]] || die "no '| Password | \`...\` |' row in $ACCESS_FILE"
+
+  if printf '%s' "$pw" | clip_copy 2>/dev/null; then
+    if (( secs > 0 )); then
+      ok "Password copied to the clipboard (cleared in ${secs}s)"
+      ( sleep "$secs"; [[ "$(clip_paste 2>/dev/null)" == "$pw" ]] && printf '' | clip_copy ) >/dev/null 2>&1 &
+    else
+      ok "Password copied to the clipboard"
+    fi
+  else
+    warn "No clipboard tool (pbcopy, wl-copy or xclip); the password is in $ACCESS_FILE"
+  fi
+  say "Email:   ${email:-see $ACCESS_FILE}"
+  say "Editor:  $url"
+  if (( open_it )); then
+    if [[ "$(uname -s)" == "Darwin" ]]; then open "$url" 2>/dev/null || true
+    elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$url" >/dev/null 2>&1 || true
+    fi
+  fi
+}
+
 cmd_help() {
   cat <<EOF
 n8nctl.sh $N8NCTL_VERSION - safe wrapper around n8n's one-line installer
@@ -1532,12 +1665,17 @@ Commands
                                  Show or edit N8N_ENABLED_MODULES (e.g. --enable agents)
   status                         Versions, key present?, containers, health, last backup
   start | stop | logs [service]  Run the stack / stop it (data kept) / follow logs
+  login [--no-open]              Copy the owner password from n8n-access.md to the clipboard
+                                 (never printed; cleared after 45 s), show the email, open the editor
   backup                         Snapshot data volume + .env + compose files (brief n8n pause)
   export                         Write every workflow as JSON to exports/<timestamp>/ (no credentials)
   chats                          List AI Assistant chats, pinned (*) first
   chats save [--pinned | ID...]  Save chats as Markdown to chats/ (all by default; one file per chat)
   chats pin|unpin ID...          Pin a chat (also from the Assistant's chat history page)
   chats rename ID TITLE...       Rename a chat (also in the Assistant's sidebar, pinned chats too)
+  chats prune [--days N]         Delete unpinned chats idle for more than N days (default 10; the
+                                 nightly job runs it). "Delete unpinned" in the Assistant's sidebar
+                                 deletes every unpinned chat
   backups [--prune N]            List snapshots; --prune keeps only the newest N
   verify <dir>                   Check a snapshot: files, sha256, versions, tarball
   restore <dir>                  Roll back to a snapshot (takes a pre-restore backup first)
@@ -1558,6 +1696,7 @@ Environment
   N8N_EXPORT_DIR       Workflow export destination           (default: \$N8N_BASE_DIR/exports)
   N8N_CHATS_DIR        Saved Assistant chats                 (default: \$N8N_BASE_DIR/chats)
   N8N_VOLUME           Data volume name                      (default: auto-detect *n8n-data)
+  N8N_ACCESS_FILE      Owner login notes, for login          (default: \$N8N_BASE_DIR/n8n-access.md)
 
 Log: n8nctl.log next to the script (installer hashes, installs, upgrades, backups).
 Docs: https://docs.n8n.io/deploy/host-n8n/install-options/one-line-setup
@@ -1591,6 +1730,7 @@ main() {
     start)     cmd_start "$@" ;;
     stop)      cmd_stop "$@" ;;
     logs)      cmd_logs "$@" ;;
+    login)     cmd_login "$@" ;;
     backup)    cmd_backup "$@" ;;
     export)    cmd_export "$@" ;;
     chats)     cmd_chats "$@" ;;

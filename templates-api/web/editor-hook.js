@@ -25,9 +25,11 @@
 //    (PATCH /rest/instance-ai/threads/<id>; n8n merges metadata, so its own
 //    fields stay). Save downloads the chat as Markdown, the same file
 //    './n8nctl.sh chats save' writes. Each pinned chat in the sidebar can be
-//    renamed in place (✎), through the same PATCH n8n's own Rename uses. If
-//    n8n's markup changes, the buttons stop appearing; nothing else is
-//    affected.
+//    renamed in place (✎), through the same PATCH n8n's own Rename uses.
+//    "Delete unpinned" under the group deletes every chat that is not pinned,
+//    after a confirmation, through n8n's own delete (its store, else
+//    DELETE /rest/instance-ai/threads/<id>). If n8n's markup changes, the
+//    buttons stop appearing; nothing else is affected.
 //
 // It runs with the editor's full privileges, so it stays small. Network:
 // the template id goes to the gallery without cookies; chat requests go only
@@ -191,6 +193,61 @@
     return null;
   }
 
+  function instanceAiStore() {
+    var g = vueGlobals();
+    return g && g.$pinia && g.$pinia._s && g.$pinia._s.get('instanceAi');
+  }
+
+  // n8n's store action deletes on the server and drops the chat from its own
+  // lists, but only calls the server for chats it loaded; whatever the server
+  // still lists afterwards is deleted directly. The list holds the newest 100
+  // chats, so this goes round until no unpinned chat is left.
+  function deleteUnpinned() {
+    var store = instanceAiStore();
+    var useStore = store && typeof store.deleteThread === 'function';
+    var deleted = 0;
+    function one(id) {
+      var viaStore = useStore ? Promise.resolve(store.deleteThread(id, { silent: true })) : Promise.resolve(false);
+      return viaStore.catch(function () { return false; }).then(function (ok) {
+        if (ok && useStore) return null;
+        return api('DELETE', '/instance-ai/threads/' + encodeURIComponent(id)).catch(function () { /* checked below */ });
+      });
+    }
+    function unpinnedIds(list) { return list.filter(function (t) { return !t.pinned; }).map(function (t) { return t.id; }); }
+    function round(ids, n) {
+      if (!ids.length) return Promise.resolve(deleted);
+      return ids.reduce(function (p, id) { return p.then(function () { return one(id); }); }, Promise.resolve())
+        .then(function () { return loadChats(true); })
+        .then(function (list) {
+          var left = unpinnedIds(list);
+          var gone = ids.filter(function (id) { return left.indexOf(id) < 0; });
+          deleted += gone.length;
+          // Still listed after the store said done (a chat it never loaded): straight to the API.
+          var retry = left.filter(function (id) { return ids.indexOf(id) >= 0; });
+          if (retry.length && useStore) { useStore = false; return round(retry, n + 1); }
+          if (retry.length) throw new Error(retry.length + ' chat(s) were not deleted');
+          return gone.length && n < 20 ? round(left, n + 1) : deleted;  // older chats beyond the newest 100
+        });
+    }
+    return loadChats(true).then(function (list) { return round(unpinnedIds(list), 0); });
+  }
+
+  function deleteUnpinnedAction() {
+    var unpinned = (chats.list || []).filter(function (t) { return !t.pinned; });
+    if (!unpinned.length) { toast('Every chat is pinned; nothing to delete'); return; }
+    var more = chats.list.length >= 100 ? ' (and any older ones)' : '';
+    if (!window.confirm('Delete ' + unpinned.length + ' chat' + (unpinned.length === 1 ? '' : 's') + more +
+        ' that are not pinned?\n\nPinned chats stay. This cannot be undone.')) return;
+    var m = CHAT_PATH.exec(location.pathname);
+    if (m && !(chatById(m[1]) || {}).pinned) {  // leave the open chat before it goes
+      var g = vueGlobals();
+      if (g && g.$router) g.$router.push(basePath().replace(/\/$/, '') + '/assistant');
+    }
+    toast('Deleting unpinned chats…');
+    deleteUnpinned().then(function (n) { toast('Deleted ' + n + ' unpinned chat' + (n === 1 ? '' : 's')); },
+      function (e) { toast('Could not delete every unpinned chat: ' + e.message); });
+  }
+
   function setPinned(id, pinned) {
     var meta = {};
     meta[PIN] = pinned;
@@ -209,8 +266,7 @@
   // from the server, sends the same PATCH again).
   function setTitle(id, title) {
     return api('PATCH', '/instance-ai/threads/' + encodeURIComponent(id), { title: title }).then(function () {
-      var g = vueGlobals();
-      var store = g && g.$pinia && g.$pinia._s && g.$pinia._s.get('instanceAi');
+      var store = instanceAiStore();
       if (store && typeof store.renameThread === 'function') {
         return Promise.resolve(store.renameThread(id, title)).catch(function () { /* saved already */ });
       }
@@ -390,6 +446,7 @@
     'border:1px solid var(--color--primary,#ff6d5a);background:var(--color--background--light-3,#fff);color:var(--color--text,inherit);outline:none}',
     '.n8nl-actions{display:flex;flex-wrap:wrap;gap:4px;padding:2px 8px}',
     '.n8nl-actions .n8nl-btn{font-size:12px;padding:4px 8px;border:1px solid var(--color--foreground,rgba(127,127,127,.35))}',
+    '.n8nl-actions .n8nl-danger:hover,.n8nl-actions .n8nl-danger:focus-visible{color:var(--color--danger,#e5484d);border-color:currentColor}',
     '#n8nl-toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(20px);opacity:0;pointer-events:none;z-index:99999;',
     'padding:8px 14px;border-radius:8px;font-size:13px;background:#222;color:#fff;box-shadow:0 4px 16px rgba(0,0,0,.25);transition:opacity .2s,transform .2s}',
     '#n8nl-toast.show{opacity:1;transform:translateX(-50%) translateY(0)}',
@@ -445,13 +502,14 @@
     var m = CHAT_PATH.exec(location.pathname);
     var open = m ? m[1] : null;
     var pinnedList = (chats.list || []).filter(function (t) { return t.pinned; });
+    var unpinnedCount = (chats.list || []).length - pinnedList.length;
     var openChat_ = open ? chatById(open) : null;
     var box = sidebar.querySelector('.n8nl-pinned');
     if (box && box.querySelector('.n8nl-rename')) return;  // a rename is being typed
     // Rebuild only when something changed, so this does not feed the observer.
-    var key = JSON.stringify([open, openChat_ && openChat_.pinned, pinnedList.map(function (t) { return [t.id, t.title]; })]);
+    var key = JSON.stringify([open, openChat_ && openChat_.pinned, unpinnedCount, pinnedList.map(function (t) { return [t.id, t.title]; })]);
     if (box && box.getAttribute('data-key') === key) return;
-    if (!pinnedList.length && !open) { if (box) box.remove(); return; }
+    if (!pinnedList.length && !open && !unpinnedCount) { if (box) box.remove(); return; }
     if (!box) {
       box = document.createElement('div');
       box.className = 'n8nl-pinned';
@@ -488,6 +546,13 @@
         function () { pinAction(open, isPinned); }));
       actions.appendChild(button('', 'Save this chat as Markdown', '⤓ Save', function () { saveAction(open); }));
       box.appendChild(actions);
+    }
+    if (unpinnedCount) {
+      var tidy = document.createElement('div');
+      tidy.className = 'n8nl-actions';
+      tidy.appendChild(button('n8nl-danger', 'Delete every chat that is not pinned', '🗑 Delete unpinned (' + unpinnedCount + ')',
+        deleteUnpinnedAction));
+      box.appendChild(tidy);
     }
   }
 

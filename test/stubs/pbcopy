@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# stub pbcopy for n8nctl smoke tests: the clipboard is $STUB_STATE/clipboard
+cat > "$STUB_STATE/clipboard"

@@ -18,7 +18,7 @@ The n8n AI Assistant (a.k.a. n8n Assistant, module name `instance-ai`) is enable
 ├── n8nctl.log           # append-only: installer hashes, installs, upgrades, backups
 ├── test/                # smoke.sh + stub docker/curl + vendored installer fixtures
 ├── examples/            # compose.override.yml template (binds n8n to 127.0.0.1)
-├── launchd/             # nightly LaunchAgent (23:00) -> n8nctl-backup.applescript app -> nightly.sh: backup, keep 14, patch upgrade, update check, save pinned chats, alert on failing triggers (status: `Triggers:`); log in ~/Library/Logs
+├── launchd/             # nightly LaunchAgent (23:00) -> n8nctl-backup.applescript app -> nightly.sh: start Docker Desktop + the stack if Docker is down, backup, keep 14, patch upgrade, update check, save pinned chats, delete unpinned chats idle >10 days (`CHAT_IDLE_DAYS`), alert on failing triggers (status: `Triggers:`); log in ~/Library/Logs
 ├── templates-api/       # local Templates gallery + ideas page + prompt generator (/prompts -> ai-prompt-generator webhook): server.py, build.py, web/; data/ generated, library/ (n8n.io templates stored on import, the server's only writable mount), both gitignored
 ├── runtime/             # force-http1.cjs: preloaded into n8n (NODE_OPTIONS) so fetch uses HTTP/1.1; n8n will not start without it
 ├── n8n/                 # CREATED BY THE UPSTREAM INSTALLER - treat as generated
@@ -49,9 +49,11 @@ Always go through the wrapper rather than raw `curl | sh`:
 | Show / enable / disable modules | `./n8nctl.sh modules [--enable agents \| --disable agents]` (edits `N8N_ENABLED_MODULES` only) |
 | Health and config check | `./n8nctl.sh status` |
 | Start / stop / logs | `./n8nctl.sh start` · `stop` · `logs [service]` |
+| Owner password | `./n8nctl.sh login [--no-open]`: copies it from `n8n-access.md` to the clipboard (never printed, cleared after 45 s), shows the email, opens the editor |
 | Snapshot | `./n8nctl.sh backup` |
 | Export all workflows as JSON (no credentials) | `./n8nctl.sh export` → `exports/<timestamp>/` |
 | List / save / pin / rename Assistant chats | `./n8nctl.sh chats` · `chats save [--pinned \| ID...]` → `chats/` · `chats pin\|unpin ID...` · `chats rename ID TITLE` (pin flag `n8nLocalPinned` in the chat's metadata; rename sets the title + `titleRefined`; also from the Assistant UI via editor-hook.js, ✎ in the Pinned group) |
+| Delete unpinned Assistant chats | `./n8nctl.sh chats prune [--days N]` (idle > N days, default 10; asks first; deletes; nightly runs it with `-y`) · UI: "🗑 Delete unpinned" under the sidebar's Pinned group (all unpinned, via n8n's own delete) |
 | List snapshots | `./n8nctl.sh backups` |
 | Check a snapshot | `./n8nctl.sh verify n8n-backups/<timestamp>` |
 | Prune to newest N | `./n8nctl.sh backups --prune N` (deletes; confirm first) |
@@ -80,7 +82,7 @@ Upstream installer flags: `--version [X]`, `--no-start`, `--upgrade`, `--help`. 
 - Windows: run under WSL with Docker Desktop's WSL2 integration. Git Bash is unverified upstream.
 - The stack includes n8n, a bundled code sandbox (`n8n-sandbox`), a bundled private web search (SearXNG), and a task-runners sidecar. Only port `5678` is published; the rest stay on the internal network.
 - The Assistant stays off until a model key exists. Generic key variable: `N8N_INSTANCE_AI_MODEL_API_KEY` in `./n8n/.env`; when it is empty n8n falls back to the active provider's own variable: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`. The generic key overrides all of them. The model is `N8N_INSTANCE_AI_MODEL` in `provider/model` form (default `anthropic/claude-opus-4-8`; providers: anthropic, openai, openrouter). Model ids follow the provider's spelling: OpenRouter uses `anthropic/claude-opus-4.8` (dot), Anthropic uses `claude-opus-4-8` (dash); a wrong spelling gives "model not found", not an auth error. One model is active at a time; there is no automatic failover. Keys can also be set in the UI under the instance AI settings.
-- Assistant chats are deleted once idle for `N8N_INSTANCE_AI_THREAD_TTL_DAYS` days (default 30, checked hourly; `0` = never; read from n8n's `instance-ai.config.js` at 2.44.6). Set to `0` in `.env` on 2026-10-23 after nine chats from Sept 18-19 were pruned; they were copied back from snapshot `20261016-030006`.
+- Assistant chats are deleted once idle for `N8N_INSTANCE_AI_THREAD_TTL_DAYS` days (default 30, checked hourly; `0` = never; read from n8n's `instance-ai.config.js` at 2.44.6). Set to `0` in `.env` on 2026-10-23 after nine chats from Sept 18-19 were pruned; they were copied back from snapshot `20261016-030006`. Keep it `0`: n8n's TTL ignores pins. Since 2026-11-07 the nightly `chats prune --days 10` deletes idle chats instead, unpinned only.
 - Optional: `INSTANCE_AI_BRAVE_SEARCH_API_KEY` in `.env` switches web search from the bundled tool to Brave. No `N8N_` prefix.
 - **Agents (Preview)**, from n8n 2.32.3, self-hosted Community only (not Enterprise). Module `agents` is opt-in via `N8N_ENABLED_MODULES`; the installer does not set it. `instance-ai` is a default module (loads without being listed; only `N8N_DISABLED_MODULES` turns it off). Unknown names in `N8N_ENABLED_MODULES` stop n8n from starting; `KNOWN_MODULES` in the wrapper mirrors `modules.config.ts` at 2.35.3. Each agent has its own model credential in the UI; the Assistant key and `set-model` do not apply to agents. Episodic memory needs an OpenAI credential. Knowledge base needs Daytona: `N8N_AGENTS_AI_SANDBOX_ENABLED=true`, `N8N_AGENTS_AI_SANDBOX_PROVIDER=daytona`, `DAYTONA_API_URL`, `DAYTONA_API_KEY`. Channels need a public HTTPS `WEBHOOK_URL`. Queue mode unsupported for agents.
 - Execution pruning: `EXECUTIONS_DATA_PRUNE`, `EXECUTIONS_DATA_MAX_AGE` (hours, default 336), `EXECUTIONS_DATA_PRUNE_MAX_COUNT` (default 10000). Timezone: `GENERIC_TIMEZONE`.
@@ -138,6 +140,7 @@ Do not invent environment variable names, compose service names, or image tags. 
 | `N8N_VOLUME` | Data volume name | auto-detect `*n8n-data` |
 | `N8N_EXPORT_DIR` | Workflow export destination | `$N8N_BASE_DIR/exports` |
 | `N8N_CHATS_DIR` | Saved Assistant chats | `$N8N_BASE_DIR/chats` |
+| `N8N_ACCESS_FILE` | Owner login notes | `$N8N_BASE_DIR/n8n-access.md` |
 
 ## References
 

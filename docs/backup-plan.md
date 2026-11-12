@@ -64,9 +64,11 @@ backup app" below.
 
 **When a run is skipped:** since 2026-10-11 the Mac does not sleep on AC
 power (`pmset -c sleep 0`), so the job normally runs on time. If the Mac is
-asleep at 23:00 (on UPS power), macOS runs the job when it wakes. If the Mac is off, or the Seagate drive is unplugged, or
-Docker is not running, that night has no backup. The next night's run is
-not affected.
+asleep at 23:00 (on UPS power), macOS runs the job when it wakes. If Docker
+Desktop is not running, the job starts it, waits up to 3 minutes, and starts
+the stack (since 2026-11-11; Docker was off on 10-28, 11-07 and 11-10). If
+the Mac is off, the Seagate drive is unplugged, or Docker does not come up in
+time, that night has no backup. The next night's run is not affected.
 
 ## What this plan does not cover
 
@@ -107,7 +109,7 @@ whenever the app opened, even if the backup inside it failed. The app's own
 | Log says | Cause | Fix |
 | --- | --- | --- |
 | `Operation not permitted` | The app's access to the drive was refused, revoked, or reset by rebuilding the app | Run the job by hand (below) and click **Allow**; or System Settings, Privacy & Security, Files and Folders, *n8nctl Backup*, Removable Volumes on |
-| `the Docker daemon is not running` | Docker Desktop not running | Start Docker Desktop; enable "Start Docker Desktop when you sign in" |
+| `Docker Desktop did not start within 180s` | The job tried to start Docker Desktop and it did not answer in time | Start Docker Desktop, then `./n8nctl.sh start` and `./n8nctl.sh backup`; enable "Start Docker Desktop when you sign in" |
 | No log line at all, `spawn failed` | The log path or drive was unavailable | Check that the Seagate drive is mounted |
 
 ## Getting data back

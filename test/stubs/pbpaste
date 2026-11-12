@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# stub pbpaste for n8nctl smoke tests
+cat "$STUB_STATE/clipboard" 2>/dev/null

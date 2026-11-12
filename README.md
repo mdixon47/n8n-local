@@ -35,6 +35,7 @@ currently needs attention on this install is in [docs/issues.md](docs/issues.md)
 - [Two providers: a partner key and a fallback](#two-providers-a-partner-key-and-a-fallback)
 - [Everyday commands](#everyday-commands)
 - [Running day to day](#running-day-to-day)
+- [Owner login](#owner-login)
 - [Backups, verify, restore](#backups-verify-restore)
 - [Exporting workflows](#exporting-workflows-for-n8n-cloud-or-another-instance)
 - [Local Templates gallery](#local-templates-gallery)
@@ -240,6 +241,7 @@ Agent Builder and republishing it.
 | Fresh install (pinned) | `./n8nctl.sh install --version X.Y.Z` |
 | Health and config | `./n8nctl.sh status` (also container health checks, bind mounts, the HTTP/1.1 preload, and backup age) |
 | Start / stop / follow logs | `./n8nctl.sh start` · `stop` · `logs [service]` |
+| Copy the owner password, open the editor | `./n8nctl.sh login` |
 | Snapshot | `./n8nctl.sh backup` |
 | Export all workflows as JSON | `./n8nctl.sh export` |
 | List snapshots | `./n8nctl.sh backups` |
@@ -261,9 +263,11 @@ and refuses to run without a terminal unless `-y` is given.
 
 ## Running day to day
 
-- The stack keeps running in the background until `./n8nctl.sh stop`. Docker
-  Desktop brings it back after a reboot if its "start on login" setting is on;
-  otherwise run `./n8nctl.sh start`, which waits for the health endpoint.
+- The stack keeps running in the background until `./n8nctl.sh stop`, or
+  until Docker Desktop quits. No service has a restart policy, so Docker
+  starting again (after a reboot, say) does not bring n8n back: run
+  `./n8nctl.sh start`, which waits for the health endpoint. The nightly job
+  does this itself when it finds Docker not running.
 - `./n8nctl.sh logs n8n` follows the main service. Other service names are
   `runners`, `sandbox-api`, `sandbox-runner-1`, and `searxng`.
 - Workflows, credentials and executions live in the Docker volume
@@ -273,6 +277,32 @@ and refuses to run without a terminal unless `-y` is given.
   devices needs the LAN binding and, for anything public, a reverse proxy with
   TLS. Public webhooks additionally need a tunnel or a public hostname.
 - The health endpoint is `http://localhost:5678/healthz`.
+
+## Owner login
+
+The owner account's email and password are kept in `n8n-access.md` in the
+project folder: gitignored, mode 600, and not in any backup. Its table needs
+two rows that `login` reads:
+
+```markdown
+| Email (login) | you@example.com |
+| Password | `the-password` |
+```
+
+```bash
+./n8nctl.sh login             # password -> clipboard (cleared after 45 s), shows the email, opens the editor
+./n8nctl.sh login --no-open   # same, without opening the browser
+```
+
+The password is never printed or logged. `login` sets the file back to
+mode 600 if it was loosened; `status` shows a `Login:` line. A browser or
+password manager is a good second place for it, since the file lives only on
+this drive.
+
+Lost password: there is no email reset (no SMTP configured). Take a backup,
+then `docker compose -f ./n8n/compose.yml exec -u node n8n n8n user-management:reset`
+and create a new owner account in the editor. Workflows and credentials are
+kept; the old owner account is not.
 
 ## Backups, verify, restore
 
@@ -329,7 +359,7 @@ workflows, check each node's credential field, then activate; imports arrive
 deactivated. Exported JSON can contain webhook paths and hard-coded values,
 so keep the folder out of git and out of chats. `N8N_EXPORT_DIR` moves it.
 
-## Saving, pinning and renaming Assistant chats
+## Saving, pinning, renaming and deleting Assistant chats
 
 n8n's AI Assistant has no pin or export of its own. Two ways to add them:
 
@@ -345,8 +375,10 @@ n8n's AI Assistant has no pin or export of its own. Two ways to add them:
   chat as a Markdown file. A pin is stored on the chat itself (the
   `n8nLocalPinned` flag in its metadata, set through n8n's own API), so it
   shows on every device. Pinning through the API counts as an update, so the
-  chat also moves to the top of n8n's recent list. Reload open editor tabs to
-  pick up changes to the script.
+  chat also moves to the top of n8n's recent list. Below the Pinned group,
+  **🗑 Delete unpinned (N)** deletes every chat that is not pinned, after a
+  confirmation, through n8n's own delete. Reload open editor tabs to pick up
+  changes to the script.
 - **From the terminal:**
 
 ```bash
@@ -356,6 +388,8 @@ n8n's AI Assistant has no pin or export of its own. Two ways to add them:
 ./n8nctl.sh chats save 90b1f392      # one chat, by id or its first 6+ characters
 ./n8nctl.sh chats pin 90b1f392       # pin / unpin without the browser
 ./n8nctl.sh chats rename 90b1f392 Weekly report workflow   # new title, 1-255 characters
+./n8nctl.sh chats prune              # delete unpinned chats idle for more than 10 days (asks first)
+./n8nctl.sh chats prune --days 3     # ... idle for more than 3 days
 ```
 
 Both write the same Markdown: your messages and the Assistant's replies with
@@ -370,8 +404,18 @@ container read-only; `pin`/`unpin` change only the chat's pin flag, and
 does). After a terminal rename, reload the Assistant tab to see it; the log
 records the chat id, not the title.
 
-Chats stay until you delete them: `N8N_INSTANCE_AI_THREAD_TTL_DAYS=0` in
-`n8n/.env` turns off n8n's default deletion of chats idle for 30 days.
+**Unpinned chats are deleted after 10 idle days.** Every night, after a good
+backup, the nightly job runs `chats prune --days 10`: each unpinned chat whose
+last activity (n8n's "last active" time, moved by each new message) is more
+than 10 days old is deleted, with its messages and sub-agent threads, the way
+n8n's own Delete does. Pinned chats are never deleted, however old; pin a chat
+to keep it. A macOS notification says how many went, and `n8nctl.log` records
+their ids. To get one back, restore a snapshot from before that night (the
+nightly backup runs first, and snapshots are kept 14 nights). The number of
+days is `CHAT_IDLE_DAYS` at the top of `launchd/nightly.sh`.
+
+n8n's own idle-chat deletion stays off (`N8N_INSTANCE_AI_THREAD_TTL_DAYS=0` in
+`n8n/.env`), because it would delete pinned chats too.
 
 ## Local Templates gallery
 
@@ -792,6 +836,7 @@ Log line format:
 | `N8N_VOLUME` | Data volume name | auto-detect `*n8n-data` |
 | `N8N_EXPORT_DIR` | Workflow export destination | `$N8N_BASE_DIR/exports` |
 | `N8N_CHATS_DIR` | Saved Assistant chats (`chats save`) | `$N8N_BASE_DIR/chats` |
+| `N8N_ACCESS_FILE` | Owner login notes (`login`) | `$N8N_BASE_DIR/n8n-access.md` |
 
 n8n variables this setup touches, all set in `n8n/.env` and applied with
 `./n8nctl.sh start`:

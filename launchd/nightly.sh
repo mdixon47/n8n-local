@@ -2,6 +2,8 @@
 #
 # The nightly job. The n8nctl Backup app (launchd/n8nctl-backup.applescript)
 # runs it at 23:00:
+#   0. when Docker is not running: start Docker Desktop, wait for it, start
+#      the stack (one notification and nothing else if Docker never comes up)
 #   1. backup, then prune to the newest 14 snapshots; tell when the data
 #      grew by more than half since the night before
 #   2. only after a good backup: upgrade --patch-only, the newest patch of the
@@ -10,7 +12,9 @@
 #   3. check-update, to hear about new minor and major versions, which are
 #      upgraded by hand
 #   4. save the pinned AI Assistant chats as Markdown in chats/ (one file per
-#      chat, replaced each night), so each has a copy outside the database
+#      chat, replaced each night), so each has a copy outside the database;
+#      then, only after a good backup, delete the unpinned chats idle for more
+#      than CHAT_IDLE_DAYS days (that night's snapshot still holds them)
 #   5. tell when a trigger kept failing in the last 24 hours: a failing poll
 #      (an expired Gmail credential, say) records no execution, so nothing
 #      else shows it
@@ -25,12 +29,35 @@ set -uo pipefail
 export PATH="$PATH:/usr/local/bin:/opt/homebrew/bin" NO_COLOR=1
 LOG="${N8NCTL_NIGHTLY_LOG:-$HOME/Library/Logs/n8nctl-backup.log}"
 STATE="${N8NCTL_NIGHTLY_STATE:-$HOME/Library/Application Support/n8nctl}"
+CHAT_IDLE_DAYS=10
 
 stamp() { date '+%Y-%m-%d %H:%M:%S %Z'; }
 notify() { printf 'NOTIFY:%s\n' "$*"; printf '  notify: %s\n' "$*" >>"$LOG"; }
 
 cd "$(dirname "$0")/.." || { notify "Nightly n8n job: project folder not found"; exit 0; }
 echo "=== $(stamp) nightly: start" >>"$LOG"
+
+# 0. Docker. Docker Desktop is sometimes not running at 23:00 (quit, or not
+#    started after a reboot), and every step below needs it. Start it, wait
+#    for the daemon, then start the stack: no service has a restart policy, so
+#    Docker alone does not bring n8n back. Only when this job had to start
+#    Docker; a stack stopped on purpose with Docker running stays stopped.
+#    N8NCTL_DOCKER_START (one command) and N8NCTL_DOCKER_WAIT are for tests.
+docker_up() { docker info >/dev/null 2>&1; }
+if ! docker_up; then
+  wait_max="${N8NCTL_DOCKER_WAIT:-180}" waited=0
+  echo "Docker is not running; starting Docker Desktop" >>"$LOG"
+  if [[ -n "${N8NCTL_DOCKER_START:-}" ]]; then "$N8NCTL_DOCKER_START"; else open -g -a Docker; fi >>"$LOG" 2>&1
+  while ! docker_up && (( waited < wait_max )); do sleep 5; waited=$((waited + 5)); done
+  if ! docker_up; then
+    notify "Nightly n8n job skipped: Docker Desktop did not start within ${wait_max}s. Start Docker, then ./n8nctl.sh start and ./n8nctl.sh backup"
+    echo "=== $(stamp) nightly: done (no Docker)" >>"$LOG"
+    exit 0
+  fi
+  echo "Docker is up after ${waited}s; starting the stack" >>"$LOG"
+  ./n8nctl.sh start >>"$LOG" 2>&1 ||
+    notify "Docker Desktop was started, but n8n did not start. Run ./n8nctl.sh status"
+fi
 
 # 1. backup
 out="$(./n8nctl.sh -y backup 2>&1)"
@@ -74,6 +101,19 @@ fi
 # 4. pinned Assistant chats -> chats/ (n8n must be up; quiet unless it fails)
 if ! ./n8nctl.sh chats save --pinned >>"$LOG" 2>&1; then
   notify "Saving the pinned n8n Assistant chats failed. Details in the log"
+fi
+# Unpinned chats idle too long. The list it prints (chat titles) stays out of
+# the log; n8nctl.log keeps the ids.
+if (( backup_ok )); then
+  out="$(./n8nctl.sh -y chats prune --days "$CHAT_IDLE_DAYS" 2>&1)"
+  rc=$?
+  grep -v '^     [0-9]\|LAST ACTIVE' <<<"$out" >>"$LOG"
+  if (( rc != 0 )); then
+    notify "Deleting old n8n Assistant chats failed. Details in the log"
+  else
+    gone="$(grep -o 'Deleted [0-9]* unpinned chat(s)' <<<"$out" | grep -o '[0-9]*')"
+    [[ -n "$gone" ]] && notify "Deleted $gone unpinned n8n Assistant chat(s) idle for more than $CHAT_IDLE_DAYS days. Pin a chat to keep it"
+  fi
 fi
 
 # 5. failing triggers (from n8n's log, via status)
